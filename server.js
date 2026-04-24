@@ -170,7 +170,7 @@ app.get("/api/calculo", async (req, res) => {
     const ano = filme.release_date ? filme.release_date.slice(0, 4) : "sem ano";
 
     return res.send(
-      `🎬 ${detalhesFilme.title || filme.title} (${ano}) tem ${minutos} minutos. Valor: ${valorBR} (R$0,45/min)`
+      `🎬 ${detalhesFilme.title || filme.title} (${ano}) tem ${minutos} minutos. Valor: ${valorBR}`
     );
   } catch (err) {
     console.error(err);

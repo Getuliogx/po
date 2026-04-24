@@ -4,11 +4,15 @@ const app = express();
 
 const TMDB_KEY = process.env.TMDB_KEY;
 
+// Coloque os canais permitidos no Render assim:
+// CANAIS_PERMITIDOS=xyzgx,outrocanal,canalterceiro
+const CANAIS_PERMITIDOS = process.env.CANAIS_PERMITIDOS || "";
+
 const PRECO_FILME_POR_MINUTO = 0.45;
 const PRECO_SERIE_POR_MINUTO = 0.40;
 
 app.get("/", (req, res) => {
-  res.send("API TMDB cálculo online. Use /api/calculo?titulo=nome");
+  res.send("API TMDB cálculo online. Use /api/calculo?channel=canal&titulo=nome");
 });
 
 function formatarReal(valor) {
@@ -22,6 +26,51 @@ function limparTitulo(texto) {
   return String(texto || "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function normalizarCanal(texto) {
+  return String(texto || "")
+    .toLowerCase()
+    .replace(/^@/, "")
+    .trim();
+}
+
+function pegarCanaisPermitidos() {
+  return CANAIS_PERMITIDOS
+    .split(",")
+    .map(canal => normalizarCanal(canal))
+    .filter(Boolean);
+}
+
+function canalEstaPermitido(canalRecebido) {
+  const canal = normalizarCanal(canalRecebido);
+  const permitidos = pegarCanaisPermitidos();
+
+  if (permitidos.length === 0) {
+    return {
+      ok: false,
+      erro: "Erro: CANAIS_PERMITIDOS não configurado no Render."
+    };
+  }
+
+  if (!canal) {
+    return {
+      ok: false,
+      erro: "Erro: canal não informado."
+    };
+  }
+
+  if (!permitidos.includes(canal)) {
+    return {
+      ok: false,
+      erro: "Este comando não está liberado para este canal."
+    };
+  }
+
+  return {
+    ok: true,
+    erro: ""
+  };
 }
 
 function separarTituloETemporada(texto) {
@@ -57,6 +106,13 @@ async function tmdbGet(url) {
 
 app.get("/api/calculo", async (req, res) => {
   try {
+    const canalRecebido = req.query.channel;
+    const permissao = canalEstaPermitido(canalRecebido);
+
+    if (!permissao.ok) {
+      return res.send(permissao.erro);
+    }
+
     const entrada = limparTitulo(req.query.titulo);
 
     if (!entrada) {
@@ -127,7 +183,7 @@ app.get("/api/calculo", async (req, res) => {
         `📺 ${serie.name} - Temporada ${temporada}: ` +
         `${episodiosComDuracao} episódio(s), ` +
         `${totalMinutos} minutos no total. ` +
-        `Valor: ${valorBR}`;
+        `Valor: ${valorBR} (R$0,40/min)`;
 
       if (episodiosSemDuracao > 0) {
         resposta += ` Obs: ${episodiosSemDuracao} episódio(s) sem minutagem no TMDB.`;
@@ -170,7 +226,7 @@ app.get("/api/calculo", async (req, res) => {
     const ano = filme.release_date ? filme.release_date.slice(0, 4) : "sem ano";
 
     return res.send(
-      `🎬 ${detalhesFilme.title || filme.title} (${ano}) tem ${minutos} minutos. Valor: ${valorBR}`
+      `🎬 ${detalhesFilme.title || filme.title} (${ano}) tem ${minutos} minutos. Valor: ${valorBR} (R$0,45/min)`
     );
   } catch (err) {
     console.error(err);

@@ -94,9 +94,6 @@ function canalEstaPermitido(canalRecebido) {
 function separarTituloETemporada(texto) {
   const tituloLimpo = limparTitulo(texto);
 
-  // Exemplo:
-  // "the 100 1" => série "the 100", temporada 1
-  // "dragon ball z 2" => anime/desenho "dragon ball z", temporada 2
   const match = tituloLimpo.match(/^(.*?)\s+(\d+)$/);
 
   if (!match) {
@@ -198,7 +195,6 @@ function linkPareceResultadoReal(link) {
 
   if (!href) return false;
 
-  // Ignora links de menu, busca, login, conta, termos etc.
   const bloqueados = [
     "search",
     "login",
@@ -225,7 +221,6 @@ function linkPareceResultadoReal(link) {
     return false;
   }
 
-  // Link sem texto útil normalmente é imagem/menu/anúncio
   if (!texto || texto.length < 3) {
     return false;
   }
@@ -251,12 +246,10 @@ function tituloPareceNosResultados(html, titulo) {
     const textoLink = normalizarTexto(link.texto);
     const hrefLink = normalizarTexto(link.href).replace(/\s+/g, "-");
 
-    // Precisa bater o título completo no texto do link
     if (textoLink.includes(tituloNormal)) {
       return true;
     }
 
-    // Ou bater o título completo no href/slug
     if (slugTitulo && hrefLink.includes(slugTitulo)) {
       return true;
     }
@@ -290,26 +283,49 @@ async function fetchComTimeout(url, timeoutMs = 4500) {
   }
 }
 
-async function verificarPossivelCensura(titulo) {
+function removerTitulosDuplicados(titulos) {
+  const vistos = new Set();
+  const lista = [];
+
+  for (const titulo of titulos) {
+    const limpo = limparTitulo(titulo);
+    const chave = normalizarTexto(limpo);
+
+    if (!limpo || !chave || vistos.has(chave)) {
+      continue;
+    }
+
+    vistos.add(chave);
+    lista.push(limpo);
+  }
+
+  return lista;
+}
+
+async function verificarPossivelCensuraPorTitulos(titulos) {
   if (!CHECK_CENSURA) {
     return false;
   }
 
-  const urls = montarUrlsCensura(titulo);
+  const listaTitulos = removerTitulosDuplicados(titulos);
 
-  for (const url of urls) {
-    const html = await fetchComTimeout(url);
+  for (const titulo of listaTitulos) {
+    const urls = montarUrlsCensura(titulo);
 
-    if (!html) {
-      continue;
-    }
+    for (const url of urls) {
+      const html = await fetchComTimeout(url);
 
-    if (paginaPareceSemResultado(html)) {
-      continue;
-    }
+      if (!html) {
+        continue;
+      }
 
-    if (tituloPareceNosResultados(html, titulo)) {
-      return true;
+      if (paginaPareceSemResultado(html)) {
+        continue;
+      }
+
+      if (tituloPareceNosResultados(html, titulo)) {
+        return true;
+      }
     }
   }
 
@@ -349,7 +365,7 @@ app.get("/api/calculo", async (req, res) => {
       return res.send("Digite o nome do filme, série, anime ou desenho.");
     }
 
-    // Se tiver número no final, trata como série/anime/desenho
+    // Série / anime / desenho
     if (temporada !== null) {
       const buscaSerieUrl =
         "https://api.themoviedb.org/3/search/tv" +
@@ -409,13 +425,19 @@ app.get("/api/calculo", async (req, res) => {
         resposta += ` Obs: ${episodiosSemDuracao} episódio(s) sem minutagem no TMDB.`;
       }
 
-      const possivelCensura = await verificarPossivelCensura(serie.name || titulo);
+      const titulosParaCensura = [
+        serie.original_name,
+        serie.name,
+        titulo
+      ];
+
+      const possivelCensura = await verificarPossivelCensuraPorTitulos(titulosParaCensura);
       resposta = adicionarAvisoCensura(resposta, possivelCensura);
 
       return res.send(resposta);
     }
 
-    // Sem número no final, trata como filme
+    // Filme
     const buscaFilmeUrl =
       "https://api.themoviedb.org/3/search/movie" +
       `?api_key=${encodeURIComponent(TMDB_KEY)}` +
@@ -452,7 +474,15 @@ app.get("/api/calculo", async (req, res) => {
       `🎬 ${detalhesFilme.title || filme.title} (${ano}) tem ` +
       `${minutos} minutos. Valor: ${valorBR} (R$0,45/min)`;
 
-    const possivelCensura = await verificarPossivelCensura(detalhesFilme.title || filme.title || titulo);
+    const titulosParaCensura = [
+      detalhesFilme.original_title,
+      filme.original_title,
+      detalhesFilme.title,
+      filme.title,
+      titulo
+    ];
+
+    const possivelCensura = await verificarPossivelCensuraPorTitulos(titulosParaCensura);
     resposta = adicionarAvisoCensura(resposta, possivelCensura);
 
     return res.send(resposta);

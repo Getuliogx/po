@@ -446,7 +446,7 @@ app.get("/api/calculo", async (req, res) => {
         `📺 ${serie.name} - Temporada ${temporada}: ` +
         `${episodiosComDuracao} episódio(s), ` +
         `${totalMinutos} minutos no total. ` +
-        `Valor: ${valorBR} (R$0,40/min)`;
+        `Valor: ${valorBR}`;
 
       if (episodiosSemDuracao > 0) {
         resposta += ` Obs: ${episodiosSemDuracao} episódio(s) sem minutagem no TMDB.`;
@@ -498,7 +498,7 @@ app.get("/api/calculo", async (req, res) => {
 
     let resposta =
       `🎬 ${detalhesFilme.title || filme.title} (${ano}) tem ` +
-      `${minutos} minutos. Valor: ${valorBR} (R$0,45/min)`;
+      `${minutos} minutos. Valor: ${valorBR}`;
 
     const titulosParaCensura = [
       detalhesFilme.original_title,

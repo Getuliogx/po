@@ -5,10 +5,10 @@ const app = express();
 const TMDB_KEY = process.env.TMDB_KEY;
 
 // No Render:
-// CANAIS_PERMITIDOS=seucanal,outrocanal
+// CANAIS_PERMITIDOS=seucanal,outrocanal,maisumcanal
 const CANAIS_PERMITIDOS = process.env.CANAIS_PERMITIDOS || "";
 
-// No Render, opcional:
+// No Render:
 // CHECK_CENSURA=true
 const CHECK_CENSURA = String(process.env.CHECK_CENSURA || "true").toLowerCase() === "true";
 
@@ -37,6 +37,10 @@ function normalizarTexto(texto) {
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
+    .replace(/&amp;/g, "and")
+    .replace(/&quot;/g, "")
+    .replace(/&#39;/g, "")
+    .replace(/&nbsp;/g, " ")
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -90,6 +94,9 @@ function canalEstaPermitido(canalRecebido) {
 function separarTituloETemporada(texto) {
   const tituloLimpo = limparTitulo(texto);
 
+  // Exemplo:
+  // "the 100 1" => série "the 100", temporada 1
+  // "dragon ball z 2" => anime/desenho "dragon ball z", temporada 2
   const match = tituloLimpo.match(/^(.*?)\s+(\d+)$/);
 
   if (!match) {
@@ -137,42 +144,125 @@ function paginaPareceSemResultado(html) {
     "0 results",
     "zero results",
     "nenhum resultado",
-    "sem resultados"
+    "sem resultados",
+    "sorry no",
+    "search returned no",
+    "we could not find",
+    "did not return any results"
   ];
 
   return frasesSemResultado.some(frase => texto.includes(frase));
 }
 
-function tituloPareceNaPagina(html, titulo) {
-  const textoPagina = normalizarTexto(html);
-  const textoTitulo = normalizarTexto(titulo);
+function removerTagsHtml(html) {
+  return String(html || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ");
+}
 
-  const palavrasIgnoradas = new Set([
-    "the", "a", "an", "of", "and", "or", "to", "in", "on", "for",
-    "o", "a", "os", "as", "um", "uma", "de", "da", "do", "das", "dos", "e"
-  ]);
+function criarSlug(texto) {
+  return normalizarTexto(texto)
+    .replace(/\s+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
 
-  const palavras = textoTitulo
-    .split(" ")
-    .filter(p => p.length >= 3 && !palavrasIgnoradas.has(p));
+function extrairLinks(html) {
+  const links = [];
+  const regex = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
 
-  if (palavras.length === 0) {
+  let match;
+
+  while ((match = regex.exec(html)) !== null) {
+    const href = String(match[1] || "");
+    const texto = removerTagsHtml(match[2] || "");
+
+    links.push({
+      href,
+      texto
+    });
+  }
+
+  return links;
+}
+
+function linkPareceResultadoReal(link) {
+  const hrefOriginal = String(link.href || "");
+  const href = hrefOriginal.toLowerCase();
+  const texto = normalizarTexto(link.texto || "");
+
+  if (!href) return false;
+
+  // Ignora links de menu, busca, login, conta, termos etc.
+  const bloqueados = [
+    "search",
+    "login",
+    "signup",
+    "join",
+    "tour",
+    "privacy",
+    "terms",
+    "contact",
+    "password",
+    "account",
+    "javascript:",
+    "#",
+    "billing",
+    "support",
+    "help",
+    "faq",
+    "members",
+    "subscribe",
+    "register"
+  ];
+
+  if (bloqueados.some(item => href.includes(item))) {
     return false;
   }
 
-  let encontradas = 0;
+  // Link sem texto útil normalmente é imagem/menu/anúncio
+  if (!texto || texto.length < 3) {
+    return false;
+  }
 
-  for (const palavra of palavras) {
-    if (textoPagina.includes(palavra)) {
-      encontradas++;
+  return true;
+}
+
+function tituloPareceNosResultados(html, titulo) {
+  const tituloNormal = normalizarTexto(titulo);
+  const slugTitulo = criarSlug(titulo);
+
+  if (!tituloNormal || tituloNormal.length < 3) {
+    return false;
+  }
+
+  const links = extrairLinks(html).filter(linkPareceResultadoReal);
+
+  if (links.length === 0) {
+    return false;
+  }
+
+  for (const link of links) {
+    const textoLink = normalizarTexto(link.texto);
+    const hrefLink = normalizarTexto(link.href).replace(/\s+/g, "-");
+
+    // Precisa bater o título completo no texto do link
+    if (textoLink.includes(tituloNormal)) {
+      return true;
+    }
+
+    // Ou bater o título completo no href/slug
+    if (slugTitulo && hrefLink.includes(slugTitulo)) {
+      return true;
     }
   }
 
-  if (palavras.length === 1) {
-    return encontradas >= 1;
-  }
-
-  return encontradas >= 2;
+  return false;
 }
 
 async function fetchComTimeout(url, timeoutMs = 4500) {
@@ -183,7 +273,8 @@ async function fetchComTimeout(url, timeoutMs = 4500) {
     const resp = await fetch(url, {
       signal: controller.signal,
       headers: {
-        "User-Agent": "Mozilla/5.0"
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
       }
     });
 
@@ -217,7 +308,7 @@ async function verificarPossivelCensura(titulo) {
       continue;
     }
 
-    if (tituloPareceNaPagina(html, titulo)) {
+    if (tituloPareceNosResultados(html, titulo)) {
       return true;
     }
   }

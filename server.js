@@ -93,7 +93,6 @@ function canalEstaPermitido(canalRecebido) {
 
 function separarTituloETemporada(texto) {
   const tituloLimpo = limparTitulo(texto);
-
   const match = tituloLimpo.match(/^(.*?)\s+(\d+)$/);
 
   if (!match) {
@@ -123,9 +122,18 @@ function montarUrlsCensura(titulo) {
   const q = encodeURIComponent(titulo);
 
   return [
-    `https://www.celebritymoviearchive.com/tour/search-full.php?searchstring=${q}`,
-    `https://www.aznude.com/search/?q=${q}`,
-    `https://www.mrskin.com/search?search=${q}`
+    {
+      nome: "cma",
+      url: `https://www.celebritymoviearchive.com/tour/search-full.php?searchstring=${q}`
+    },
+    {
+      nome: "aznude",
+      url: `https://www.aznude.com/search/?q=${q}`
+    },
+    {
+      nome: "mrskin",
+      url: `https://www.mrskin.com/search?search=${q}`
+    }
   ];
 }
 
@@ -189,18 +197,15 @@ function extrairLinks(html) {
 }
 
 function linkPareceResultadoReal(link) {
-  const hrefOriginal = String(link.href || "");
-  const href = hrefOriginal.toLowerCase();
+  const href = String(link.href || "").toLowerCase();
   const texto = normalizarTexto(link.texto || "");
 
   if (!href) return false;
 
   const bloqueados = [
-    "search",
     "login",
     "signup",
     "join",
-    "tour",
     "privacy",
     "terms",
     "contact",
@@ -214,23 +219,48 @@ function linkPareceResultadoReal(link) {
     "faq",
     "members",
     "subscribe",
-    "register"
+    "register",
+    "forgot",
+    "logout",
+    "about",
+    "advertise"
   ];
 
   if (bloqueados.some(item => href.includes(item))) {
     return false;
   }
 
-  if (!texto || texto.length < 3) {
+  if (!texto || texto.length < 2) {
     return false;
   }
 
   return true;
 }
 
-function tituloPareceNosResultados(html, titulo) {
+function tituloBateNoTexto(texto, titulo) {
+  const textoNormal = normalizarTexto(texto);
   const tituloNormal = normalizarTexto(titulo);
   const slugTitulo = criarSlug(titulo);
+
+  if (!textoNormal || !tituloNormal || tituloNormal.length < 3) {
+    return false;
+  }
+
+  if (textoNormal.includes(tituloNormal)) {
+    return true;
+  }
+
+  const textoComoSlug = textoNormal.replace(/\s+/g, "-");
+
+  if (slugTitulo && textoComoSlug.includes(slugTitulo)) {
+    return true;
+  }
+
+  return false;
+}
+
+function tituloPareceNosResultados(html, titulo) {
+  const tituloNormal = normalizarTexto(titulo);
 
   if (!tituloNormal || tituloNormal.length < 3) {
     return false;
@@ -238,19 +268,15 @@ function tituloPareceNosResultados(html, titulo) {
 
   const links = extrairLinks(html).filter(linkPareceResultadoReal);
 
-  if (links.length === 0) {
-    return false;
-  }
-
   for (const link of links) {
-    const textoLink = normalizarTexto(link.texto);
-    const hrefLink = normalizarTexto(link.href).replace(/\s+/g, "-");
+    const href = String(link.href || "");
+    const texto = String(link.texto || "");
 
-    if (textoLink.includes(tituloNormal)) {
+    if (tituloBateNoTexto(texto, titulo)) {
       return true;
     }
 
-    if (slugTitulo && hrefLink.includes(slugTitulo)) {
+    if (tituloBateNoTexto(href, titulo)) {
       return true;
     }
   }
@@ -258,16 +284,18 @@ function tituloPareceNosResultados(html, titulo) {
   return false;
 }
 
-async function fetchComTimeout(url, timeoutMs = 4500) {
+async function fetchComTimeout(url, timeoutMs = 6500) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const resp = await fetch(url, {
       signal: controller.signal,
+      redirect: "follow",
       headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,pt-BR;q=0.8,pt;q=0.7"
       }
     });
 
@@ -310,10 +338,10 @@ async function verificarPossivelCensuraPorTitulos(titulos) {
   const listaTitulos = removerTitulosDuplicados(titulos);
 
   for (const titulo of listaTitulos) {
-    const urls = montarUrlsCensura(titulo);
+    const buscas = montarUrlsCensura(titulo);
 
-    for (const url of urls) {
-      const html = await fetchComTimeout(url);
+    for (const busca of buscas) {
+      const html = await fetchComTimeout(busca.url);
 
       if (!html) {
         continue;
@@ -365,7 +393,6 @@ app.get("/api/calculo", async (req, res) => {
       return res.send("Digite o nome do filme, série, anime ou desenho.");
     }
 
-    // Série / anime / desenho
     if (temporada !== null) {
       const buscaSerieUrl =
         "https://api.themoviedb.org/3/search/tv" +
@@ -437,7 +464,6 @@ app.get("/api/calculo", async (req, res) => {
       return res.send(resposta);
     }
 
-    // Filme
     const buscaFilmeUrl =
       "https://api.themoviedb.org/3/search/movie" +
       `?api_key=${encodeURIComponent(TMDB_KEY)}` +

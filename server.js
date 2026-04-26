@@ -498,7 +498,7 @@ app.get("/api/calculo", async (req, res) => {
 
     let resposta =
       `🎬 ${detalhesFilme.title || filme.title} (${ano}) tem ` +
-      `${minutos} minutos. Valor: ${valorBR}`;
+      `${minutos} minutos. Valor: ${valorBR} / `;
 
     const titulosParaCensura = [
       detalhesFilme.original_title,

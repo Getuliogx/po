@@ -446,7 +446,7 @@ app.get("/api/calculo", async (req, res) => {
         `📺 ${serie.name} - Temporada ${temporada}: ` +
         `${episodiosComDuracao} episódio(s), ` +
         `${totalMinutos} minutos no total. ` +
-        `Valor: ${valorBR}`;
+        `Valor: ${valorBR} / `;
 
       if (episodiosSemDuracao > 0) {
         resposta += ` Obs: ${episodiosSemDuracao} episódio(s) sem minutagem no TMDB.`;

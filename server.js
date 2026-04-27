@@ -452,14 +452,42 @@ app.get("/api/calculo", async (req, res) => {
         resposta += ` Obs: ${episodiosSemDuracao} episódio(s) sem minutagem no TMDB.`;
       }
 
-      const titulosParaCensura = [
-        serie.original_name,
-        serie.name,
-        titulo
-      ];
+      const nomesSerie = removerTitulosDuplicados([
+  serie.original_name,
+  serie.name,
+  titulo
+]);
 
-      const possivelCensura = await verificarPossivelCensuraPorTitulos(titulosParaCensura);
-      resposta = adicionarAvisoCensura(resposta, possivelCensura);
+const nomesEpisodios = dadosTemporada.episodes
+  .map(ep => ep.name)
+  .filter(Boolean);
+
+const titulosParaCensura = [];
+
+// Pesquisa pelo nome da série
+for (const nomeSerie of nomesSerie) {
+  titulosParaCensura.push(nomeSerie);
+  titulosParaCensura.push(`${nomeSerie} season ${temporada}`);
+  titulosParaCensura.push(`${nomeSerie} temporada ${temporada}`);
+}
+
+// Pesquisa também combinando série + episódio
+for (const nomeSerie of nomesSerie) {
+  for (const nomeEp of nomesEpisodios) {
+    titulosParaCensura.push(`${nomeSerie} ${nomeEp}`);
+    titulosParaCensura.push(`${nomeSerie} - ${nomeEp}`);
+  }
+}
+
+// Pesquisa pelo nome do episódio sozinho, mas só se tiver nome útil
+for (const nomeEp of nomesEpisodios) {
+  if (normalizarTexto(nomeEp).length >= 5) {
+    titulosParaCensura.push(nomeEp);
+  }
+}
+
+const possivelCensura = await verificarPossivelCensuraPorTitulos(titulosParaCensura);
+resposta = adicionarAvisoCensura(resposta, possivelCensura);
 
       return res.send(resposta);
     }

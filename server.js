@@ -91,21 +91,68 @@ function canalEstaPermitido(canalRecebido) {
   };
 }
 
-function separarTituloETemporada(texto) {
-  const tituloLimpo = limparTitulo(texto);
-  const match = tituloLimpo.match(/^(.*?)\s+(\d+)$/);
+function separarTituloAnoETemporada(texto) {
+  let titulo = limparTitulo(texto);
+  let ano = null;
+  let temporada = null;
+  let anoFoiInformado = false;
 
-  if (!match) {
-    return {
-      titulo: tituloLimpo,
-      temporada: null
-    };
+  // Aceita no final: T1, t1, S1, temporada 1, temp 1.
+  // Exemplos: "perdidos no espaço 2018 T1", "lost temporada 2".
+  const matchTemporadaExplicita = titulo.match(/^(.*?)\s+(?:t|s|temp|temporada)\s*\.?\s*(\d+)$/i);
+
+  if (matchTemporadaExplicita) {
+    titulo = limparTitulo(matchTemporadaExplicita[1]);
+    temporada = Number(matchTemporadaExplicita[2]);
+  }
+
+  // Aceita ano no final depois de remover a temporada.
+  // Exemplos: "a mumia 1999", "perdidos no espaço 2018 T1".
+  const matchAno = titulo.match(/^(.*?)\s+\(?((?:18|19|20|21)\d{2})\)?$/);
+
+  if (matchAno) {
+    titulo = limparTitulo(matchAno[1]);
+    ano = Number(matchAno[2]);
+    anoFoiInformado = true;
+  }
+
+  // Mantém compatibilidade com o comando antigo: "nome da serie 1".
+  // Se for 4 dígitos, considera ano, não temporada.
+  if (temporada === null && !anoFoiInformado) {
+    const matchTemporadaAntiga = titulo.match(/^(.*?)\s+(\d{1,2})$/);
+
+    if (matchTemporadaAntiga) {
+      titulo = limparTitulo(matchTemporadaAntiga[1]);
+      temporada = Number(matchTemporadaAntiga[2]);
+    }
   }
 
   return {
-    titulo: limparTitulo(match[1]),
-    temporada: Number(match[2])
+    titulo,
+    ano,
+    temporada
   };
+}
+
+function anoDoFilme(item) {
+  return item && item.release_date ? String(item.release_date).slice(0, 4) : "";
+}
+
+function anoDaSerie(item) {
+  return item && item.first_air_date ? String(item.first_air_date).slice(0, 4) : "";
+}
+
+function escolherResultadoPorAno(resultados, ano, pegarAno) {
+  if (!Array.isArray(resultados) || resultados.length === 0) {
+    return null;
+  }
+
+  if (!ano) {
+    return resultados[0];
+  }
+
+  const anoTexto = String(ano);
+  return resultados.find(item => pegarAno(item) === anoTexto) || null;
 }
 
 async function tmdbGet(url) {
@@ -380,14 +427,14 @@ app.get("/api/calculo", async (req, res) => {
     const entrada = limparTitulo(req.query.titulo);
 
     if (!entrada) {
-      return res.send("Use assim: !calculo nome do filme ou !calculo nome da serie 1");
+      return res.send("Use assim: !calculo nome do filme 1999 ou !calculo nome da serie 2018 T1");
     }
 
     if (!TMDB_KEY) {
       return res.send("Erro: TMDB_KEY não configurada no Render.");
     }
 
-    const { titulo, temporada } = separarTituloETemporada(entrada);
+    const { titulo, ano, temporada } = separarTituloAnoETemporada(entrada);
 
     if (!titulo) {
       return res.send("Digite o nome do filme, série, anime ou desenho.");
@@ -399,15 +446,20 @@ app.get("/api/calculo", async (req, res) => {
         `?api_key=${encodeURIComponent(TMDB_KEY)}` +
         `&language=pt-BR` +
         `&query=${encodeURIComponent(titulo)}` +
-        `&include_adult=false`;
+        `&include_adult=false` +
+        (ano ? `&first_air_date_year=${encodeURIComponent(ano)}` : "");
 
       const buscaSerie = await tmdbGet(buscaSerieUrl);
 
       if (!buscaSerie.results || buscaSerie.results.length === 0) {
-        return res.send(`Não achei a série/anime/desenho "${titulo}" no TMDB.`);
+        return res.send(`Não achei a série/anime/desenho "${titulo}"${ano ? ` de ${ano}` : ""} no TMDB.`);
       }
 
-      const serie = buscaSerie.results[0];
+      const serie = escolherResultadoPorAno(buscaSerie.results, ano, anoDaSerie);
+
+      if (!serie) {
+        return res.send(`Não achei a série/anime/desenho "${titulo}"${ano ? ` de ${ano}` : ""} no TMDB.`);
+      }
 
       const temporadaUrl =
         `https://api.themoviedb.org/3/tv/${serie.id}/season/${temporada}` +
@@ -442,8 +494,10 @@ app.get("/api/calculo", async (req, res) => {
       const valor = totalMinutos * PRECO_SERIE_POR_MINUTO;
       const valorBR = formatarReal(valor);
 
+      const anoSerie = anoDaSerie(serie) || "sem ano";
+
       let resposta =
-        `📺 ${serie.name} - Temporada ${temporada}: ` +
+        `📺 ${serie.name} (${anoSerie}) - Temporada ${temporada}: ` +
         `${episodiosComDuracao} episódio(s), ` +
         `${totalMinutos} minutos no total. ` +
         `Valor: ${valorBR} / `;
@@ -497,15 +551,20 @@ resposta = adicionarAvisoCensura(resposta, possivelCensura);
       `?api_key=${encodeURIComponent(TMDB_KEY)}` +
       `&language=pt-BR` +
       `&query=${encodeURIComponent(titulo)}` +
-      `&include_adult=false`;
+      `&include_adult=false` +
+      (ano ? `&primary_release_year=${encodeURIComponent(ano)}` : "");
 
     const buscaFilme = await tmdbGet(buscaFilmeUrl);
 
     if (!buscaFilme.results || buscaFilme.results.length === 0) {
-      return res.send(`Não achei o filme "${titulo}" no TMDB.`);
+      return res.send(`Não achei o filme "${titulo}"${ano ? ` de ${ano}` : ""} no TMDB.`);
     }
 
-    const filme = buscaFilme.results[0];
+    const filme = escolherResultadoPorAno(buscaFilme.results, ano, anoDoFilme);
+
+    if (!filme) {
+      return res.send(`Não achei o filme "${titulo}"${ano ? ` de ${ano}` : ""} no TMDB.`);
+    }
 
     const detalhesFilmeUrl =
       `https://api.themoviedb.org/3/movie/${filme.id}` +
@@ -522,10 +581,10 @@ resposta = adicionarAvisoCensura(resposta, possivelCensura);
 
     const valor = minutos * PRECO_FILME_POR_MINUTO;
     const valorBR = formatarReal(valor);
-    const ano = filme.release_date ? filme.release_date.slice(0, 4) : "sem ano";
+    const anoFilme = filme.release_date ? filme.release_date.slice(0, 4) : "sem ano";
 
     let resposta =
-      `🎬 ${detalhesFilme.title || filme.title} (${ano}) tem ` +
+      `🎬 ${detalhesFilme.title || filme.title} (${anoFilme}) tem ` +
       `${minutos} minutos. Valor: ${valorBR} / `;
 
     const titulosParaCensura = [

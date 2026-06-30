@@ -91,35 +91,99 @@ function canalEstaPermitido(canalRecebido) {
   };
 }
 
-function separarTituloAnoETemporada(texto) {
+function detectarTipoEntrada(texto) {
+  const entrada = limparTitulo(texto);
+
+  const regras = [
+    { tipo: "coletanea", regex: /^(?:colet[aâ]nea|cole[cç][aã]o|saga|franquia)\s+(.+)$/i },
+    { tipo: "filme", regex: /^filmes?\s+(.+)$/i },
+    { tipo: "serie", regex: /^(?:s[eé]ries?|seriados?)\s+(.+)$/i },
+    { tipo: "anime", regex: /^animes?\s+(.+)$/i },
+    { tipo: "desenho", regex: /^desenhos?\s+(.+)$/i }
+  ];
+
+  for (const regra of regras) {
+    const match = entrada.match(regra.regex);
+
+    if (match) {
+      return {
+        tipo: regra.tipo,
+        titulo: limparTitulo(match[1])
+      };
+    }
+  }
+
+  return {
+    tipo: "auto",
+    titulo: entrada
+  };
+}
+
+function tipoEhSerie(tipo) {
+  return ["serie", "anime", "desenho"].includes(tipo);
+}
+
+function tirarTemporadaExplicitaDoFim(titulo) {
+  const match = titulo.match(/^(.*?)\s+(?:t|s|temp|temporada)\s*\.?\s*(\d{1,3})$/i);
+
+  if (!match) {
+    return { titulo, temporada: null };
+  }
+
+  return {
+    titulo: limparTitulo(match[1]),
+    temporada: Number(match[2])
+  };
+}
+
+function tirarAnoDoFim(titulo) {
+  const match = titulo.match(/^(.*?)\s+\(?((?:18|19|20|21)\d{2})\)?$/);
+
+  if (!match) {
+    return { titulo, ano: null };
+  }
+
+  return {
+    titulo: limparTitulo(match[1]),
+    ano: Number(match[2])
+  };
+}
+
+function separarTituloAnoETemporada(texto, tipo = "auto") {
   let titulo = limparTitulo(texto);
   let ano = null;
   let temporada = null;
-  let anoFoiInformado = false;
 
-  // Aceita no final: T1, t1, S1, temporada 1, temp 1.
-  // Exemplos: "perdidos no espaço 2018 T1", "lost temporada 2".
-  const matchTemporadaExplicita = titulo.match(/^(.*?)\s+(?:t|s|temp|temporada)\s*\.?\s*(\d+)$/i);
+  // Aceita os dois formatos:
+  // "perdidos no espaço 2018 T1" e "perdidos no espaço T1 2018".
+  for (let i = 0; i < 2; i++) {
+    if (temporada === null) {
+      const tirouTemporada = tirarTemporadaExplicitaDoFim(titulo);
 
-  if (matchTemporadaExplicita) {
-    titulo = limparTitulo(matchTemporadaExplicita[1]);
-    temporada = Number(matchTemporadaExplicita[2]);
+      if (tirouTemporada.temporada !== null) {
+        titulo = tirouTemporada.titulo;
+        temporada = tirouTemporada.temporada;
+        continue;
+      }
+    }
+
+    if (ano === null) {
+      const tirouAno = tirarAnoDoFim(titulo);
+
+      if (tirouAno.ano !== null) {
+        titulo = tirouAno.titulo;
+        ano = tirouAno.ano;
+        continue;
+      }
+    }
+
+    break;
   }
 
-  // Aceita ano no final depois de remover a temporada.
-  // Exemplos: "a mumia 1999", "perdidos no espaço 2018 T1".
-  const matchAno = titulo.match(/^(.*?)\s+\(?((?:18|19|20|21)\d{2})\)?$/);
-
-  if (matchAno) {
-    titulo = limparTitulo(matchAno[1]);
-    ano = Number(matchAno[2]);
-    anoFoiInformado = true;
-  }
-
-  // Mantém compatibilidade com o comando antigo: "nome da serie 1".
-  // Se for 4 dígitos, considera ano, não temporada.
-  if (temporada === null && !anoFoiInformado) {
-    const matchTemporadaAntiga = titulo.match(/^(.*?)\s+(\d{1,2})$/);
+  // Só trata número final como temporada quando o usuário deixou claro que é série/anime/desenho.
+  // Isso corrige filmes com número no nome, tipo "Premonição 2" e "Gente Grande 2".
+  if (temporada === null && tipoEhSerie(tipo)) {
+    const matchTemporadaAntiga = titulo.match(/^(.*?)\s+(\d{1,3})$/);
 
     if (matchTemporadaAntiga) {
       titulo = limparTitulo(matchTemporadaAntiga[1]);
@@ -132,6 +196,39 @@ function separarTituloAnoETemporada(texto) {
     ano,
     temporada
   };
+}
+
+function separarColetaneaEFaixa(texto) {
+  let titulo = limparTitulo(texto);
+  let inicio = 1;
+  let fim = null;
+  let descricaoFaixa = "completa";
+
+  const matchFaixa = titulo.match(/^(.*?)\s+(\d{1,2})\s*(?:ao|a|ate|até|-)\s*(\d{1,2})$/i);
+
+  if (matchFaixa) {
+    titulo = limparTitulo(matchFaixa[1]);
+    inicio = Number(matchFaixa[2]);
+    fim = Number(matchFaixa[3]);
+    descricaoFaixa = `${inicio} ao ${fim}`;
+  } else {
+    const matchPrimeiros = titulo.match(/^(.*?)\s+(?:primeiros?\s+)?(\d{1,2})\s+filmes?$/i);
+
+    if (matchPrimeiros) {
+      titulo = limparTitulo(matchPrimeiros[1]);
+      fim = Number(matchPrimeiros[2]);
+      descricaoFaixa = `1 ao ${fim}`;
+    }
+  }
+
+  if (fim !== null && fim < inicio) {
+    const temp = inicio;
+    inicio = fim;
+    fim = temp;
+    descricaoFaixa = `${inicio} ao ${fim}`;
+  }
+
+  return { titulo, inicio, fim, descricaoFaixa };
 }
 
 function anoDoFilme(item) {
@@ -415,6 +512,410 @@ function adicionarAvisoCensura(resposta, possivelCensura) {
   return resposta;
 }
 
+function deduplicarPorId(lista) {
+  const vistos = new Set();
+  const saida = [];
+
+  for (const item of lista || []) {
+    if (!item || !item.id || vistos.has(item.id)) {
+      continue;
+    }
+
+    vistos.add(item.id);
+    saida.push(item);
+  }
+
+  return saida;
+}
+
+function pontuarResultadoFilme(item, titulo) {
+  const alvo = normalizarTexto(titulo);
+  const nomes = [item.title, item.original_title]
+    .map(normalizarTexto)
+    .filter(Boolean);
+
+  let pontos = Number(item.popularity || 0);
+
+  for (const nome of nomes) {
+    if (nome === alvo) pontos += 1000;
+    if (nome.includes(alvo) || alvo.includes(nome)) pontos += 250;
+  }
+
+  return pontos;
+}
+
+function escolherMelhorFilme(resultados, titulo, ano) {
+  const porAno = ano ? resultados.filter(item => anoDoFilme(item) === String(ano)) : resultados;
+  const base = porAno.length > 0 ? porAno : resultados;
+
+  return [...base].sort((a, b) => pontuarResultadoFilme(b, titulo) - pontuarResultadoFilme(a, titulo))[0] || null;
+}
+
+async function buscarFilmePorTitulo(titulo, ano) {
+  const urls = [
+    "https://api.themoviedb.org/3/search/movie" +
+      `?api_key=${encodeURIComponent(TMDB_KEY)}` +
+      `&language=pt-BR` +
+      `&query=${encodeURIComponent(titulo)}` +
+      `&include_adult=false` +
+      (ano ? `&primary_release_year=${encodeURIComponent(ano)}` : ""),
+    "https://api.themoviedb.org/3/search/movie" +
+      `?api_key=${encodeURIComponent(TMDB_KEY)}` +
+      `&language=pt-BR` +
+      `&query=${encodeURIComponent(titulo)}` +
+      `&include_adult=false`,
+    "https://api.themoviedb.org/3/search/movie" +
+      `?api_key=${encodeURIComponent(TMDB_KEY)}` +
+      `&language=en-US` +
+      `&query=${encodeURIComponent(titulo)}` +
+      `&include_adult=false` +
+      (ano ? `&primary_release_year=${encodeURIComponent(ano)}` : "")
+  ];
+
+  const resultados = [];
+
+  for (const url of urls) {
+    const busca = await tmdbGet(url);
+    resultados.push(...(busca.results || []));
+  }
+
+  return escolherMelhorFilme(deduplicarPorId(resultados), titulo, ano);
+}
+
+function pontuarResultadoSerie(item, titulo) {
+  const alvo = normalizarTexto(titulo);
+  const nomes = [item.name, item.original_name]
+    .map(normalizarTexto)
+    .filter(Boolean);
+
+  let pontos = Number(item.popularity || 0);
+
+  for (const nome of nomes) {
+    if (nome === alvo) pontos += 1000;
+    if (nome.includes(alvo) || alvo.includes(nome)) pontos += 250;
+  }
+
+  return pontos;
+}
+
+function escolherMelhorSerie(resultados, titulo, ano) {
+  const porAno = ano ? resultados.filter(item => anoDaSerie(item) === String(ano)) : resultados;
+  const base = porAno.length > 0 ? porAno : resultados;
+
+  return [...base].sort((a, b) => pontuarResultadoSerie(b, titulo) - pontuarResultadoSerie(a, titulo))[0] || null;
+}
+
+async function buscarSeriePorTitulo(titulo, ano) {
+  const urls = [
+    "https://api.themoviedb.org/3/search/tv" +
+      `?api_key=${encodeURIComponent(TMDB_KEY)}` +
+      `&language=pt-BR` +
+      `&query=${encodeURIComponent(titulo)}` +
+      `&include_adult=false` +
+      (ano ? `&first_air_date_year=${encodeURIComponent(ano)}` : ""),
+    "https://api.themoviedb.org/3/search/tv" +
+      `?api_key=${encodeURIComponent(TMDB_KEY)}` +
+      `&language=pt-BR` +
+      `&query=${encodeURIComponent(titulo)}` +
+      `&include_adult=false`,
+    "https://api.themoviedb.org/3/search/tv" +
+      `?api_key=${encodeURIComponent(TMDB_KEY)}` +
+      `&language=en-US` +
+      `&query=${encodeURIComponent(titulo)}` +
+      `&include_adult=false` +
+      (ano ? `&first_air_date_year=${encodeURIComponent(ano)}` : "")
+  ];
+
+  const resultados = [];
+
+  for (const url of urls) {
+    const busca = await tmdbGet(url);
+    resultados.push(...(busca.results || []));
+  }
+
+  return escolherMelhorSerie(deduplicarPorId(resultados), titulo, ano);
+}
+
+function pontuarColecao(item, titulo) {
+  const alvo = normalizarTexto(titulo);
+  const nome = normalizarTexto(item.name);
+
+  let pontos = 0;
+
+  if (nome === alvo) pontos += 1000;
+  if (nome === `${alvo} collection`) pontos += 1000;
+  if (nome.includes(alvo)) pontos += 500;
+  if (alvo.includes(nome)) pontos += 200;
+
+  return pontos;
+}
+
+function escolherMelhorColecao(resultados, titulo) {
+  return [...(resultados || [])]
+    .sort((a, b) => pontuarColecao(b, titulo) - pontuarColecao(a, titulo))[0] || null;
+}
+
+async function buscarColecaoPorTitulo(titulo) {
+  const buscaColecaoUrl =
+    "https://api.themoviedb.org/3/search/collection" +
+    `?api_key=${encodeURIComponent(TMDB_KEY)}` +
+    `&language=pt-BR` +
+    `&query=${encodeURIComponent(titulo)}`;
+
+  const buscaColecao = await tmdbGet(buscaColecaoUrl);
+  let colecao = escolherMelhorColecao(buscaColecao.results || [], titulo);
+
+  if (!colecao) {
+    const filme = await buscarFilmePorTitulo(titulo, null);
+
+    if (filme) {
+      const detalhesFilmeUrl =
+        `https://api.themoviedb.org/3/movie/${filme.id}` +
+        `?api_key=${encodeURIComponent(TMDB_KEY)}` +
+        `&language=pt-BR`;
+      const detalhesFilme = await tmdbGet(detalhesFilmeUrl);
+      colecao = detalhesFilme.belongs_to_collection || null;
+    }
+  }
+
+  if (!colecao || !colecao.id) {
+    return null;
+  }
+
+  const detalhesColecaoUrl =
+    `https://api.themoviedb.org/3/collection/${colecao.id}` +
+    `?api_key=${encodeURIComponent(TMDB_KEY)}` +
+    `&language=pt-BR`;
+
+  return tmdbGet(detalhesColecaoUrl);
+}
+
+function ordenarPartesDaColecao(partes) {
+  return [...(partes || [])]
+    .filter(item => item && item.id)
+    .sort((a, b) => {
+      const dataA = a.release_date || "9999-99-99";
+      const dataB = b.release_date || "9999-99-99";
+
+      if (dataA === dataB) {
+        return String(a.title || a.original_title || "").localeCompare(String(b.title || b.original_title || ""));
+      }
+
+      return dataA.localeCompare(dataB);
+    });
+}
+
+function selecionarPartesPorFaixa(partes, inicio, fim) {
+  const começo = Math.max(1, Number(inicio || 1));
+  const final = fim === null ? partes.length : Math.min(partes.length, Number(fim));
+
+  return partes.slice(começo - 1, final);
+}
+
+function formatarListaCurta(lista, limite = 5) {
+  const limpa = lista.map(limparTitulo).filter(Boolean);
+
+  if (limpa.length <= limite) {
+    return limpa.join(", ");
+  }
+
+  return limpa.slice(0, limite).join(", ") + ` +${limpa.length - limite}`;
+}
+
+async function responderColetanea(entradaColetanea) {
+  const { titulo, inicio, fim, descricaoFaixa } = separarColetaneaEFaixa(entradaColetanea);
+
+  if (!titulo) {
+    return "Use assim: !calculo coletanea nome da saga ou !calculo coletanea nome da saga 2 ao 5";
+  }
+
+  const colecao = await buscarColecaoPorTitulo(titulo);
+
+  if (!colecao || !Array.isArray(colecao.parts) || colecao.parts.length === 0) {
+    return `Não achei a coletânea "${titulo}" no TMDB.`;
+  }
+
+  const partesOrdenadas = ordenarPartesDaColecao(colecao.parts);
+  const partesSelecionadas = selecionarPartesPorFaixa(partesOrdenadas, inicio, fim);
+
+  if (partesSelecionadas.length === 0) {
+    return `Achei "${colecao.name}", mas não achei filmes nessa faixa.`;
+  }
+
+  let totalMinutos = 0;
+  let filmesComDuracao = 0;
+  let filmesSemDuracao = 0;
+  const nomesFilmes = [];
+  const titulosParaCensura = [colecao.name, titulo];
+
+  for (const parte of partesSelecionadas) {
+    const detalhesUrl =
+      `https://api.themoviedb.org/3/movie/${parte.id}` +
+      `?api_key=${encodeURIComponent(TMDB_KEY)}` +
+      `&language=pt-BR`;
+    const detalhes = await tmdbGet(detalhesUrl);
+    const nome = detalhes.title || parte.title || parte.original_title;
+
+    nomesFilmes.push(nome);
+    titulosParaCensura.push(detalhes.original_title, parte.original_title, detalhes.title, parte.title);
+
+    if (detalhes.runtime && detalhes.runtime > 0) {
+      totalMinutos += detalhes.runtime;
+      filmesComDuracao++;
+    } else {
+      filmesSemDuracao++;
+    }
+  }
+
+  if (totalMinutos <= 0) {
+    return `Achei "${colecao.name}", mas o TMDB não tem minutagem cadastrada para os filmes selecionados.`;
+  }
+
+  const valor = totalMinutos * PRECO_FILME_POR_MINUTO;
+  const valorBR = formatarReal(valor);
+  const faixaTexto = descricaoFaixa === "completa" ? "completa" : descricaoFaixa;
+
+  let resposta =
+    `🎬 Coletânea ${colecao.name} (${faixaTexto}): ` +
+    `${filmesComDuracao} filme(s), ${totalMinutos} minutos no total. ` +
+    `Valor: ${valorBR} / ` +
+    `Filmes: ${formatarListaCurta(nomesFilmes)}.`;
+
+  if (filmesSemDuracao > 0) {
+    resposta += ` Obs: ${filmesSemDuracao} filme(s) sem minutagem no TMDB.`;
+  }
+
+  const possivelCensura = await verificarPossivelCensuraPorTitulos(titulosParaCensura);
+  return adicionarAvisoCensura(resposta, possivelCensura);
+}
+
+async function responderSerie(titulo, ano, temporada, tipo) {
+  if (temporada === null) {
+    return `Informe a temporada. Exemplo: !calculo ${tipo === "auto" ? "serie " : tipo + " "}${titulo} 1`;
+  }
+
+  const serie = await buscarSeriePorTitulo(titulo, ano);
+
+  if (!serie) {
+    return `Não achei a série/anime/desenho "${titulo}"${ano ? ` de ${ano}` : ""} no TMDB.`;
+  }
+
+  const temporadaUrl =
+    `https://api.themoviedb.org/3/tv/${serie.id}/season/${temporada}` +
+    `?api_key=${encodeURIComponent(TMDB_KEY)}` +
+    `&language=pt-BR`;
+
+  const dadosTemporada = await tmdbGet(temporadaUrl);
+
+  if (!dadosTemporada.episodes || dadosTemporada.episodes.length === 0) {
+    return `Achei "${serie.name}", mas não achei a temporada ${temporada}.`;
+  }
+
+  let totalMinutos = 0;
+  let episodiosComDuracao = 0;
+  let episodiosSemDuracao = 0;
+
+  for (const ep of dadosTemporada.episodes) {
+    if (ep.runtime && ep.runtime > 0) {
+      totalMinutos += ep.runtime;
+      episodiosComDuracao++;
+    } else {
+      episodiosSemDuracao++;
+    }
+  }
+
+  if (totalMinutos <= 0) {
+    return `Achei "${serie.name}" T${temporada}, mas o TMDB não tem minutagem dos episódios cadastrada.`;
+  }
+
+  const valor = totalMinutos * PRECO_SERIE_POR_MINUTO;
+  const valorBR = formatarReal(valor);
+  const anoSerie = anoDaSerie(serie) || "sem ano";
+
+  let resposta =
+    `📺 ${serie.name} (${anoSerie}) - Temporada ${temporada}: ` +
+    `${episodiosComDuracao} episódio(s), ` +
+    `${totalMinutos} minutos no total. ` +
+    `Valor: ${valorBR} / `;
+
+  if (episodiosSemDuracao > 0) {
+    resposta += ` Obs: ${episodiosSemDuracao} episódio(s) sem minutagem no TMDB.`;
+  }
+
+  const nomesSerie = removerTitulosDuplicados([
+    serie.original_name,
+    serie.name,
+    titulo
+  ]);
+
+  const nomesEpisodios = dadosTemporada.episodes
+    .map(ep => ep.name)
+    .filter(Boolean);
+
+  const titulosParaCensura = [];
+
+  for (const nomeSerie of nomesSerie) {
+    titulosParaCensura.push(nomeSerie);
+    titulosParaCensura.push(`${nomeSerie} season ${temporada}`);
+    titulosParaCensura.push(`${nomeSerie} temporada ${temporada}`);
+  }
+
+  for (const nomeSerie of nomesSerie) {
+    for (const nomeEp of nomesEpisodios) {
+      titulosParaCensura.push(`${nomeSerie} ${nomeEp}`);
+      titulosParaCensura.push(`${nomeSerie} - ${nomeEp}`);
+    }
+  }
+
+  for (const nomeEp of nomesEpisodios) {
+    if (normalizarTexto(nomeEp).length >= 5) {
+      titulosParaCensura.push(nomeEp);
+    }
+  }
+
+  const possivelCensura = await verificarPossivelCensuraPorTitulos(titulosParaCensura);
+  return adicionarAvisoCensura(resposta, possivelCensura);
+}
+
+async function responderFilme(titulo, ano) {
+  const filme = await buscarFilmePorTitulo(titulo, ano);
+
+  if (!filme) {
+    return `Não achei o filme "${titulo}"${ano ? ` de ${ano}` : ""} no TMDB.`;
+  }
+
+  const detalhesFilmeUrl =
+    `https://api.themoviedb.org/3/movie/${filme.id}` +
+    `?api_key=${encodeURIComponent(TMDB_KEY)}` +
+    `&language=pt-BR`;
+
+  const detalhesFilme = await tmdbGet(detalhesFilmeUrl);
+  const minutos = detalhesFilme.runtime;
+
+  if (!minutos || minutos <= 0) {
+    return `Achei "${filme.title}", mas o TMDB não tem a minutagem cadastrada.`;
+  }
+
+  const valor = minutos * PRECO_FILME_POR_MINUTO;
+  const valorBR = formatarReal(valor);
+  const anoFilme = anoDoFilme(filme) || anoDoFilme(detalhesFilme) || "sem ano";
+
+  let resposta =
+    `🎬 ${detalhesFilme.title || filme.title} (${anoFilme}) tem ` +
+    `${minutos} minutos. Valor: ${valorBR} / `;
+
+  const titulosParaCensura = [
+    detalhesFilme.original_title,
+    filme.original_title,
+    detalhesFilme.title,
+    filme.title,
+    titulo
+  ];
+
+  const possivelCensura = await verificarPossivelCensuraPorTitulos(titulosParaCensura);
+  return adicionarAvisoCensura(resposta, possivelCensura);
+}
+
 app.get("/api/calculo", async (req, res) => {
   try {
     const canalRecebido = req.query.channel;
@@ -427,178 +928,30 @@ app.get("/api/calculo", async (req, res) => {
     const entrada = limparTitulo(req.query.titulo);
 
     if (!entrada) {
-      return res.send("Use assim: !calculo nome do filme 1999 ou !calculo nome da serie 2018 T1");
+      return res.send("Use assim: !calculo filme nome 1999, !calculo serie nome 1 ou !calculo coletanea nome da saga 2 ao 5");
     }
 
     if (!TMDB_KEY) {
       return res.send("Erro: TMDB_KEY não configurada no Render.");
     }
 
-    const { titulo, ano, temporada } = separarTituloAnoETemporada(entrada);
+    const entradaDetectada = detectarTipoEntrada(entrada);
+
+    if (entradaDetectada.tipo === "coletanea") {
+      return res.send(await responderColetanea(entradaDetectada.titulo));
+    }
+
+    const { titulo, ano, temporada } = separarTituloAnoETemporada(entradaDetectada.titulo, entradaDetectada.tipo);
 
     if (!titulo) {
       return res.send("Digite o nome do filme, série, anime ou desenho.");
     }
 
-    if (temporada !== null) {
-      const buscaSerieUrl =
-        "https://api.themoviedb.org/3/search/tv" +
-        `?api_key=${encodeURIComponent(TMDB_KEY)}` +
-        `&language=pt-BR` +
-        `&query=${encodeURIComponent(titulo)}` +
-        `&include_adult=false` +
-        (ano ? `&first_air_date_year=${encodeURIComponent(ano)}` : "");
-
-      const buscaSerie = await tmdbGet(buscaSerieUrl);
-
-      if (!buscaSerie.results || buscaSerie.results.length === 0) {
-        return res.send(`Não achei a série/anime/desenho "${titulo}"${ano ? ` de ${ano}` : ""} no TMDB.`);
-      }
-
-      const serie = escolherResultadoPorAno(buscaSerie.results, ano, anoDaSerie);
-
-      if (!serie) {
-        return res.send(`Não achei a série/anime/desenho "${titulo}"${ano ? ` de ${ano}` : ""} no TMDB.`);
-      }
-
-      const temporadaUrl =
-        `https://api.themoviedb.org/3/tv/${serie.id}/season/${temporada}` +
-        `?api_key=${encodeURIComponent(TMDB_KEY)}` +
-        `&language=pt-BR`;
-
-      const dadosTemporada = await tmdbGet(temporadaUrl);
-
-      if (!dadosTemporada.episodes || dadosTemporada.episodes.length === 0) {
-        return res.send(`Achei "${serie.name}", mas não achei a temporada ${temporada}.`);
-      }
-
-      let totalMinutos = 0;
-      let episodiosComDuracao = 0;
-      let episodiosSemDuracao = 0;
-
-      for (const ep of dadosTemporada.episodes) {
-        if (ep.runtime && ep.runtime > 0) {
-          totalMinutos += ep.runtime;
-          episodiosComDuracao++;
-        } else {
-          episodiosSemDuracao++;
-        }
-      }
-
-      if (totalMinutos <= 0) {
-        return res.send(
-          `Achei "${serie.name}" T${temporada}, mas o TMDB não tem minutagem dos episódios cadastrada.`
-        );
-      }
-
-      const valor = totalMinutos * PRECO_SERIE_POR_MINUTO;
-      const valorBR = formatarReal(valor);
-
-      const anoSerie = anoDaSerie(serie) || "sem ano";
-
-      let resposta =
-        `📺 ${serie.name} (${anoSerie}) - Temporada ${temporada}: ` +
-        `${episodiosComDuracao} episódio(s), ` +
-        `${totalMinutos} minutos no total. ` +
-        `Valor: ${valorBR} / `;
-
-      if (episodiosSemDuracao > 0) {
-        resposta += ` Obs: ${episodiosSemDuracao} episódio(s) sem minutagem no TMDB.`;
-      }
-
-      const nomesSerie = removerTitulosDuplicados([
-  serie.original_name,
-  serie.name,
-  titulo
-]);
-
-const nomesEpisodios = dadosTemporada.episodes
-  .map(ep => ep.name)
-  .filter(Boolean);
-
-const titulosParaCensura = [];
-
-// Pesquisa pelo nome da série
-for (const nomeSerie of nomesSerie) {
-  titulosParaCensura.push(nomeSerie);
-  titulosParaCensura.push(`${nomeSerie} season ${temporada}`);
-  titulosParaCensura.push(`${nomeSerie} temporada ${temporada}`);
-}
-
-// Pesquisa também combinando série + episódio
-for (const nomeSerie of nomesSerie) {
-  for (const nomeEp of nomesEpisodios) {
-    titulosParaCensura.push(`${nomeSerie} ${nomeEp}`);
-    titulosParaCensura.push(`${nomeSerie} - ${nomeEp}`);
-  }
-}
-
-// Pesquisa pelo nome do episódio sozinho, mas só se tiver nome útil
-for (const nomeEp of nomesEpisodios) {
-  if (normalizarTexto(nomeEp).length >= 5) {
-    titulosParaCensura.push(nomeEp);
-  }
-}
-
-const possivelCensura = await verificarPossivelCensuraPorTitulos(titulosParaCensura);
-resposta = adicionarAvisoCensura(resposta, possivelCensura);
-
-      return res.send(resposta);
+    if (tipoEhSerie(entradaDetectada.tipo) || (entradaDetectada.tipo === "auto" && temporada !== null)) {
+      return res.send(await responderSerie(titulo, ano, temporada, entradaDetectada.tipo));
     }
 
-    const buscaFilmeUrl =
-      "https://api.themoviedb.org/3/search/movie" +
-      `?api_key=${encodeURIComponent(TMDB_KEY)}` +
-      `&language=pt-BR` +
-      `&query=${encodeURIComponent(titulo)}` +
-      `&include_adult=false` +
-      (ano ? `&primary_release_year=${encodeURIComponent(ano)}` : "");
-
-    const buscaFilme = await tmdbGet(buscaFilmeUrl);
-
-    if (!buscaFilme.results || buscaFilme.results.length === 0) {
-      return res.send(`Não achei o filme "${titulo}"${ano ? ` de ${ano}` : ""} no TMDB.`);
-    }
-
-    const filme = escolherResultadoPorAno(buscaFilme.results, ano, anoDoFilme);
-
-    if (!filme) {
-      return res.send(`Não achei o filme "${titulo}"${ano ? ` de ${ano}` : ""} no TMDB.`);
-    }
-
-    const detalhesFilmeUrl =
-      `https://api.themoviedb.org/3/movie/${filme.id}` +
-      `?api_key=${encodeURIComponent(TMDB_KEY)}` +
-      `&language=pt-BR`;
-
-    const detalhesFilme = await tmdbGet(detalhesFilmeUrl);
-
-    const minutos = detalhesFilme.runtime;
-
-    if (!minutos || minutos <= 0) {
-      return res.send(`Achei "${filme.title}", mas o TMDB não tem a minutagem cadastrada.`);
-    }
-
-    const valor = minutos * PRECO_FILME_POR_MINUTO;
-    const valorBR = formatarReal(valor);
-    const anoFilme = filme.release_date ? filme.release_date.slice(0, 4) : "sem ano";
-
-    let resposta =
-      `🎬 ${detalhesFilme.title || filme.title} (${anoFilme}) tem ` +
-      `${minutos} minutos. Valor: ${valorBR} / `;
-
-    const titulosParaCensura = [
-      detalhesFilme.original_title,
-      filme.original_title,
-      detalhesFilme.title,
-      filme.title,
-      titulo
-    ];
-
-    const possivelCensura = await verificarPossivelCensuraPorTitulos(titulosParaCensura);
-    resposta = adicionarAvisoCensura(resposta, possivelCensura);
-
-    return res.send(resposta);
+    return res.send(await responderFilme(titulo, ano));
   } catch (err) {
     console.error(err);
     return res.send("Erro ao consultar o TMDB ou calcular o valor.");

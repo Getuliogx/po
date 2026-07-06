@@ -198,6 +198,15 @@ function separarTituloAnoETemporada(texto, tipo = "auto") {
   };
 }
 
+
+function separarTituloAnoTemporadaEEpisodios(texto, tipo = "auto") {
+  let { titulo, ano, temporada } = separarTituloAnoETemporada(texto, tipo);
+  let epInicio = null, epFim = null;
+  const m = titulo.match(/^(.*?)\s+ep\s*(\d+)(?:\s*(?:ao|a|ate|até|-)\s*(\d+))?$/i);
+  if (m){titulo=limparTitulo(m[1]); epInicio=Number(m[2]); epFim=m[3]?Number(m[3]):epInicio;}
+  return {titulo,ano,temporada,epInicio,epFim};
+}
+
 function separarColetaneaEFaixa(texto) {
   let titulo = limparTitulo(texto);
   let inicio = 1;
@@ -789,7 +798,7 @@ async function responderColetanea(entradaColetanea) {
   return adicionarAvisoCensura(resposta, possivelCensura);
 }
 
-async function responderSerie(titulo, ano, temporada, tipo) {
+async function responderSerie(titulo, ano, temporada, epInicio, epFim, tipo) {
   if (temporada === null) {
     return `Informe a temporada. Exemplo: !calculo ${tipo === "auto" ? "serie " : tipo + " "}${titulo} 1`;
   }
@@ -811,11 +820,18 @@ async function responderSerie(titulo, ano, temporada, tipo) {
     return `Achei "${serie.name}", mas não achei a temporada ${temporada}.`;
   }
 
+  let episodios = dadosTemporada.episodes;
+  if (epInicio !== null){
+    if(epFim===null) epFim=epInicio;
+    episodios=episodios.filter(ep=>ep.episode_number>=epInicio && ep.episode_number<=epFim);
+    if(!episodios.length) return `Não encontrei os episódios solicitados na temporada ${temporada}.`;
+  }
+
   let totalMinutos = 0;
   let episodiosComDuracao = 0;
   let episodiosSemDuracao = 0;
 
-  for (const ep of dadosTemporada.episodes) {
+  for (const ep of episodios) {
     if (ep.runtime && ep.runtime > 0) {
       totalMinutos += ep.runtime;
       episodiosComDuracao++;
@@ -832,8 +848,9 @@ async function responderSerie(titulo, ano, temporada, tipo) {
   const valorBR = formatarReal(valor);
   const anoSerie = anoDaSerie(serie) || "sem ano";
 
+  const descricao = epInicio===null?`Temporada ${temporada}`:(epInicio===epFim?`T${temporada} EP${epInicio}`:`T${temporada} EP${epInicio} ao EP${epFim}`);
   let resposta =
-    `📺 ${serie.name} (${anoSerie}) - Temporada ${temporada}: ` +
+    `📺 ${serie.name} (${anoSerie}) - ${descricao}: ` +
     `${episodiosComDuracao} episódio(s), ` +
     `${totalMinutos} minutos no total. ` +
     `Valor: ${valorBR} / `;
@@ -848,7 +865,7 @@ async function responderSerie(titulo, ano, temporada, tipo) {
     titulo
   ]);
 
-  const nomesEpisodios = dadosTemporada.episodes
+  const nomesEpisodios = episodios
     .map(ep => ep.name)
     .filter(Boolean);
 
@@ -941,14 +958,14 @@ app.get("/api/calculo", async (req, res) => {
       return res.send(await responderColetanea(entradaDetectada.titulo));
     }
 
-    const { titulo, ano, temporada } = separarTituloAnoETemporada(entradaDetectada.titulo, entradaDetectada.tipo);
+    const { titulo, ano, temporada, epInicio, epFim } = separarTituloAnoTemporadaEEpisodios(entradaDetectada.titulo, entradaDetectada.tipo);
 
     if (!titulo) {
       return res.send("Digite o nome do filme, série, anime ou desenho.");
     }
 
     if (tipoEhSerie(entradaDetectada.tipo) || (entradaDetectada.tipo === "auto" && temporada !== null)) {
-      return res.send(await responderSerie(titulo, ano, temporada, entradaDetectada.tipo));
+      return res.send(await responderSerie(titulo, ano, temporada, epInicio, epFim, entradaDetectada.tipo));
     }
 
     return res.send(await responderFilme(titulo, ano));

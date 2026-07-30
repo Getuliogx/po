@@ -50,3 +50,26 @@ temp 1
 ```
 
 Observação: número simples no final só vira temporada quando você usa `serie`, `anime` ou `desenho`. Assim filmes como `Premonição 2`, `Gente Grande 2` e `Distrito 9` não são confundidos com temporada.
+
+
+## Busca de censura corrigida
+
+A verificação de censura agora usa o título real encontrado no TMDB junto com o ano de lançamento.
+
+Ela só mostra `Possível censura: verificar.` quando encontra um resultado exato com:
+
+- o mesmo título, em português ou no título original;
+- o mesmo ano do filme selecionado;
+- um link real de resultado, e não o link da própria pesquisa.
+
+Recomendações parecidas, continuações, remakes de outro ano e páginas que informam que não encontraram resultados são ignoradas.
+
+Exemplo:
+
+```text
+!calculo filme chicken run 2000
+```
+
+`Chicken Run: Dawn of the Nugget (2023)` não é mais confundido com `Chicken Run (2000)`.
+
+A busca principal do TMDB também ficou mais rígida quando um ano é informado: título e ano precisam corresponder, evitando selecionar outro filme homônimo ou uma recomendação apenas parecida.

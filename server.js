@@ -272,8 +272,12 @@ async function tmdbGet(url) {
   return resp.json();
 }
 
-function montarUrlsCensura(titulo) {
-  const q = encodeURIComponent(titulo);
+function montarUrlsCensura(titulo, ano) {
+  // O ano vai junto na pesquisa para evitar misturar filmes homônimos.
+  const termo = [limparTitulo(titulo), ano ? String(ano) : ""]
+    .filter(Boolean)
+    .join(" ");
+  const q = encodeURIComponent(termo);
 
   return [
     {
@@ -343,7 +347,9 @@ function extrairLinks(html) {
 
     links.push({
       href,
-      texto
+      texto,
+      inicio: match.index,
+      fim: regex.lastIndex
     });
   }
 
@@ -377,7 +383,11 @@ function linkPareceResultadoReal(link) {
     "forgot",
     "logout",
     "about",
-    "advertise"
+    "advertise",
+    "/search",
+    "search?",
+    "searchstring=",
+    "?q="
   ];
 
   if (bloqueados.some(item => href.includes(item))) {
@@ -391,51 +401,102 @@ function linkPareceResultadoReal(link) {
   return true;
 }
 
-function tituloBateNoTexto(texto, titulo) {
-  const textoNormal = normalizarTexto(texto);
-  const tituloNormal = normalizarTexto(titulo);
-  const slugTitulo = criarSlug(titulo);
+const PALAVRAS_GENERICAS_CENSURA = new Set([
+  "nude", "nudes", "nudity", "scene", "scenes", "sex", "sexy",
+  "clip", "clips", "video", "videos", "photo", "photos", "picture", "pictures",
+  "gallery", "galleries", "movie", "movies", "film", "films", "cinema",
+  "watch", "online", "archive", "tour", "page", "pages", "title", "titles",
+  "cast", "review", "reviews", "celebrity", "celebrities", "actress", "actresses",
+  "actor", "actors", "mrskin", "aznude", "celebritymoviearchive", "cma",
+  "www", "com", "https", "http", "html", "htm", "view", "content"
+]);
 
-  if (!textoNormal || !tituloNormal || tituloNormal.length < 3) {
+function textoContemAnoExato(texto, ano) {
+  if (!ano) {
+    return true;
+  }
+
+  const anoTexto = String(ano);
+  const normal = normalizarTexto(texto);
+  return normal.split(" ").includes(anoTexto);
+}
+
+function limparCandidatoCensura(texto) {
+  return normalizarTexto(texto)
+    .split(" ")
+    .filter(Boolean)
+    .filter(palavra => !/^(?:18|19|20|21)\d{2}$/.test(palavra))
+    .filter(palavra => !PALAVRAS_GENERICAS_CENSURA.has(palavra))
+    .join(" ");
+}
+
+function tituloBateExatamenteNoCampo(campo, titulo) {
+  const alvoNormal = normalizarTexto(titulo);
+  const alvoLimpo = limparCandidatoCensura(titulo);
+  const campoNormal = normalizarTexto(campo);
+  const campoLimpo = limparCandidatoCensura(campo);
+
+  if (!alvoNormal || alvoNormal.length < 2 || !campoNormal) {
     return false;
   }
 
-  if (textoNormal.includes(tituloNormal)) {
-    return true;
-  }
-
-  const textoComoSlug = textoNormal.replace(/\s+/g, "-");
-
-  if (slugTitulo && textoComoSlug.includes(slugTitulo)) {
-    return true;
-  }
-
-  return false;
+  // Aceita diferenças de artigos e pontuação, mas não aceita subtítulos,
+  // continuações ou recomendações que apenas contenham algumas palavras.
+  return campoNormal === alvoNormal ||
+    campoLimpo === alvoLimpo ||
+    chaveComparavel(campoLimpo) === chaveComparavel(alvoLimpo);
 }
 
-function tituloPareceNosResultados(html, titulo) {
+function contextoDoLink(html, link, margem = 180) {
+  const pagina = String(html || "");
+  let inicio = Math.max(0, Number(link.inicio || 0) - margem);
+  let fim = Math.min(pagina.length, Number(link.fim || 0) + margem);
+
+  // Não deixa o ano de outro cartão/link vizinho validar o filme atual.
+  const fechamentoAnterior = pagina.lastIndexOf("</a>", Number(link.inicio || 0) - 1);
+  const proximaAncora = pagina.indexOf("<a", Number(link.fim || 0));
+
+  if (fechamentoAnterior >= inicio) {
+    inicio = fechamentoAnterior + 4;
+  }
+
+  if (proximaAncora >= 0 && proximaAncora < fim) {
+    fim = proximaAncora;
+  }
+
+  return removerTagsHtml(pagina.slice(inicio, fim));
+}
+
+function linkEhResultadoExato(html, link, titulo, ano) {
+  const tituloExato =
+    tituloBateExatamenteNoCampo(link.texto, titulo) ||
+    tituloBateExatamenteNoCampo(link.href, titulo);
+
+  if (!tituloExato) {
+    return false;
+  }
+
+  if (!ano) {
+    return true;
+  }
+
+  // O ano deve estar no próprio resultado ou imediatamente ao redor dele.
+  // Se o site só sugerir um título parecido ou outra versão, não gera aviso.
+  return textoContemAnoExato(link.texto, ano) ||
+    textoContemAnoExato(link.href, ano) ||
+    textoContemAnoExato(contextoDoLink(html, link), ano);
+}
+
+function tituloPareceNosResultados(html, titulo, ano) {
   const tituloNormal = normalizarTexto(titulo);
 
-  if (!tituloNormal || tituloNormal.length < 3) {
+  if (!tituloNormal || tituloNormal.length < 2) {
     return false;
   }
 
   const links = extrairLinks(html).filter(linkPareceResultadoReal);
 
-  for (const link of links) {
-    const href = String(link.href || "");
-    const texto = String(link.texto || "");
-
-    if (tituloBateNoTexto(texto, titulo)) {
-      return true;
-    }
-
-    if (tituloBateNoTexto(href, titulo)) {
-      return true;
-    }
-  }
-
-  return false;
+  return links.some(link => linkEhResultadoExato(html, link, titulo, ano));
 }
 
 async function fetchComTimeout(url, timeoutMs = 6500) {
@@ -465,34 +526,35 @@ async function fetchComTimeout(url, timeoutMs = 6500) {
   }
 }
 
-function removerTitulosDuplicados(titulos) {
+function normalizarConsultasCensura(consultas) {
   const vistos = new Set();
   const lista = [];
 
-  for (const titulo of titulos) {
-    const limpo = limparTitulo(titulo);
-    const chave = normalizarTexto(limpo);
+  for (const item of consultas || []) {
+    const titulo = limparTitulo(typeof item === "string" ? item : item && item.titulo);
+    const ano = typeof item === "object" && item && item.ano ? String(item.ano) : "";
+    const chave = `${normalizarTexto(titulo)}|${ano}`;
 
-    if (!limpo || !chave || vistos.has(chave)) {
+    if (!titulo || !normalizarTexto(titulo) || vistos.has(chave)) {
       continue;
     }
 
     vistos.add(chave);
-    lista.push(limpo);
+    lista.push({ titulo, ano });
   }
 
   return lista;
 }
 
-async function verificarPossivelCensuraPorTitulos(titulos) {
+async function verificarPossivelCensuraPorTitulos(consultas) {
   if (!CHECK_CENSURA) {
     return false;
   }
 
-  const listaTitulos = removerTitulosDuplicados(titulos);
+  const lista = normalizarConsultasCensura(consultas);
 
-  for (const titulo of listaTitulos) {
-    const buscas = montarUrlsCensura(titulo);
+  for (const consulta of lista) {
+    const buscas = montarUrlsCensura(consulta.titulo, consulta.ano);
 
     for (const busca of buscas) {
       const html = await fetchComTimeout(busca.url);
@@ -505,7 +567,7 @@ async function verificarPossivelCensuraPorTitulos(titulos) {
         continue;
       }
 
-      if (tituloPareceNosResultados(html, titulo)) {
+      if (tituloPareceNosResultados(html, consulta.titulo, consulta.ano)) {
         return true;
       }
     }
@@ -622,9 +684,23 @@ function pontuarResultadoFilme(item, titulo) {
   return correspondencia + popularidade + votos;
 }
 
+function resultadoTemTituloExato(nomes, titulo) {
+  const alvoNormal = normalizarTexto(titulo);
+  const alvoChave = chaveComparavel(titulo);
+
+  return (nomes || []).filter(Boolean).some(nome => {
+    return normalizarTexto(nome) === alvoNormal || chaveComparavel(nome) === alvoChave;
+  });
+}
+
 function escolherMelhorFilme(resultados, titulo, ano) {
   const porAno = ano ? resultados.filter(item => anoDoFilme(item) === String(ano)) : resultados;
-  const base = ano ? porAno : resultados;
+  let base = ano ? porAno : resultados;
+
+  if (ano) {
+    // Com ano informado, uma recomendação apenas parecida não é aceita.
+    base = base.filter(item => resultadoTemTituloExato([item.title, item.original_title], titulo));
+  }
 
   if (base.length === 0) {
     return null;
@@ -729,7 +805,11 @@ function pontuarResultadoSerie(item, titulo) {
 
 function escolherMelhorSerie(resultados, titulo, ano) {
   const porAno = ano ? resultados.filter(item => anoDaSerie(item) === String(ano)) : resultados;
-  const base = ano ? porAno : resultados;
+  let base = ano ? porAno : resultados;
+
+  if (ano) {
+    base = base.filter(item => resultadoTemTituloExato([item.name, item.original_name], titulo));
+  }
 
   if (base.length === 0) {
     return null;
@@ -866,7 +946,7 @@ async function responderColetanea(entradaColetanea) {
   let filmesComDuracao = 0;
   let filmesSemDuracao = 0;
   const nomesFilmes = [];
-  const titulosParaCensura = [colecao.name, titulo];
+  const titulosParaCensura = [];
 
   for (const parte of partesSelecionadas) {
     const detalhesUrl =
@@ -877,7 +957,13 @@ async function responderColetanea(entradaColetanea) {
     const nome = detalhes.title || parte.title || parte.original_title;
 
     nomesFilmes.push(nome);
-    titulosParaCensura.push(detalhes.original_title, parte.original_title, detalhes.title, parte.title);
+    const anoParte = anoDoFilme(detalhes) || anoDoFilme(parte);
+    titulosParaCensura.push(
+      { titulo: detalhes.original_title, ano: anoParte },
+      { titulo: parte.original_title, ano: anoParte },
+      { titulo: detalhes.title, ano: anoParte },
+      { titulo: parte.title, ano: anoParte }
+    );
 
     if (detalhes.runtime && detalhes.runtime > 0) {
       totalMinutos += detalhes.runtime;
@@ -970,34 +1056,29 @@ async function responderSerie(titulo, ano, temporada, epInicio, epFim, tipo) {
     resposta += ` Obs: ${episodiosSemDuracao} episódio(s) sem minutagem no TMDB.`;
   }
 
-  const nomesSerie = removerTitulosDuplicados([
+  const nomesSerie = [
     serie.original_name,
     serie.name,
     titulo
-  ]);
+  ].filter(Boolean);
 
   const nomesEpisodios = episodios
     .map(ep => ep.name)
     .filter(Boolean);
 
   const titulosParaCensura = [];
+  const anoCensuraSerie = anoDaSerie(serie) || ano || "";
 
   for (const nomeSerie of nomesSerie) {
-    titulosParaCensura.push(nomeSerie);
-    titulosParaCensura.push(`${nomeSerie} season ${temporada}`);
-    titulosParaCensura.push(`${nomeSerie} temporada ${temporada}`);
+    titulosParaCensura.push({ titulo: nomeSerie, ano: anoCensuraSerie });
+    titulosParaCensura.push({ titulo: `${nomeSerie} season ${temporada}`, ano: anoCensuraSerie });
+    titulosParaCensura.push({ titulo: `${nomeSerie} temporada ${temporada}`, ano: anoCensuraSerie });
   }
 
   for (const nomeSerie of nomesSerie) {
     for (const nomeEp of nomesEpisodios) {
-      titulosParaCensura.push(`${nomeSerie} ${nomeEp}`);
-      titulosParaCensura.push(`${nomeSerie} - ${nomeEp}`);
-    }
-  }
-
-  for (const nomeEp of nomesEpisodios) {
-    if (normalizarTexto(nomeEp).length >= 5) {
-      titulosParaCensura.push(nomeEp);
+      titulosParaCensura.push({ titulo: `${nomeSerie} ${nomeEp}`, ano: anoCensuraSerie });
+      titulosParaCensura.push({ titulo: `${nomeSerie} - ${nomeEp}`, ano: anoCensuraSerie });
     }
   }
 
@@ -1033,11 +1114,11 @@ async function responderFilme(titulo, ano) {
     `${minutos} minutos. Valor: ${valorBR} / `;
 
   const titulosParaCensura = [
-    detalhesFilme.original_title,
-    filme.original_title,
-    detalhesFilme.title,
-    filme.title,
-    titulo
+    { titulo: detalhesFilme.original_title, ano: anoFilme },
+    { titulo: filme.original_title, ano: anoFilme },
+    { titulo: detalhesFilme.title, ano: anoFilme },
+    { titulo: filme.title, ano: anoFilme },
+    { titulo, ano: anoFilme }
   ];
 
   const possivelCensura = await verificarPossivelCensuraPorTitulos(titulosParaCensura);
@@ -1104,5 +1185,11 @@ module.exports = {
   colecaoCorrespondeExatamenteAoTitulo,
   pontuarResultadoFilme,
   pontuarResultadoSerie,
-  separarTituloAnoTemporadaEEpisodios
+  separarTituloAnoTemporadaEEpisodios,
+  tituloPareceNosResultados,
+  tituloBateExatamenteNoCampo,
+  linkEhResultadoExato,
+  normalizarConsultasCensura,
+  resultadoTemTituloExato,
+  paginaPareceSemResultado
 };

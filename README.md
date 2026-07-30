@@ -11,7 +11,15 @@ Filme:
 !calculo filme gente grande 2
 !calculo filme premonição 2
 !calculo filme a mumia 1999
+!calculo filmes senhor dos anéis
+!calculo filme senhor dos anéis as duas torres
 ```
+
+Quando o nome digitado corresponde a uma franquia, a busca sem subtítulo escolhe o primeiro filme lançado da coleção. Se você informar um número, subtítulo ou ano, essa informação continua tendo prioridade.
+
+Exemplo: `!calculo filmes senhor dos anéis` seleciona **O Senhor dos Anéis: A Sociedade do Anel**, e não uma continuação mais popular.
+
+Quando um ano é informado, a busca respeita exatamente esse ano e não troca silenciosamente por outra versão.
 
 Série, anime ou desenho:
 

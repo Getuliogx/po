@@ -38,6 +38,7 @@ function normalizarTexto(texto) {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/&amp;/g, "and")
+    .replace(/&/g, " e ")
     .replace(/&quot;/g, "")
     .replace(/&#39;/g, "")
     .replace(/&nbsp;/g, " ")
@@ -537,30 +538,152 @@ function deduplicarPorId(lista) {
   return saida;
 }
 
-function pontuarResultadoFilme(item, titulo) {
-  const alvo = normalizarTexto(titulo);
-  const nomes = [item.title, item.original_title]
-    .map(normalizarTexto)
-    .filter(Boolean);
+const PALAVRAS_DE_LIGACAO = new Set([
+  "a", "as", "o", "os", "um", "uma", "uns", "umas",
+  "de", "da", "das", "do", "dos", "e", "and", "of",
+  "the", "an", "el", "la", "las", "los"
+]);
 
-  let pontos = Number(item.popularity || 0);
+const PALAVRAS_DE_COLECAO = new Set([
+  "colecao", "colecoes", "collection", "collections",
+  "saga", "franquia", "franchise", "trilogia", "trilogy",
+  "quadrilogia", "filme", "filmes", "movie", "movies"
+]);
 
-  for (const nome of nomes) {
-    if (nome === alvo) pontos += 1000;
-    if (nome.includes(alvo) || alvo.includes(nome)) pontos += 250;
+function palavrasComparaveis(texto, removerPalavrasDeColecao = false) {
+  return normalizarTexto(texto)
+    .split(" ")
+    .filter(Boolean)
+    .filter(palavra => !PALAVRAS_DE_LIGACAO.has(palavra))
+    .filter(palavra => !removerPalavrasDeColecao || !PALAVRAS_DE_COLECAO.has(palavra));
+}
+
+function chaveComparavel(texto, removerPalavrasDeColecao = false) {
+  return palavrasComparaveis(texto, removerPalavrasDeColecao).join(" ");
+}
+
+function quantidadePalavrasEmComum(a, b) {
+  const conjuntoB = new Set(b);
+  return a.filter(palavra => conjuntoB.has(palavra)).length;
+}
+
+function contemSequenciaCompleta(frase, trecho) {
+  if (!frase || !trecho) {
+    return false;
   }
+
+  return ` ${frase} `.includes(` ${trecho} `);
+}
+
+function pontuarCorrespondenciaDeTitulo(nome, titulo) {
+  const nomeNormal = normalizarTexto(nome);
+  const alvoNormal = normalizarTexto(titulo);
+  const nomePalavras = palavrasComparaveis(nome);
+  const alvoPalavras = palavrasComparaveis(titulo);
+  const nomeChave = nomePalavras.join(" ");
+  const alvoChave = alvoPalavras.join(" ");
+
+  if (!nomeNormal || !alvoNormal || alvoPalavras.length === 0) {
+    return -100000;
+  }
+
+  let pontos = 0;
+
+  if (nomeNormal === alvoNormal) pontos += 100000;
+  if (nomeChave === alvoChave) pontos += 90000;
+  if (nomeNormal.startsWith(`${alvoNormal} `)) pontos += 50000;
+  if (nomeChave.startsWith(`${alvoChave} `)) pontos += 45000;
+  if (contemSequenciaCompleta(nomeNormal, alvoNormal)) pontos += 25000;
+  if (contemSequenciaCompleta(nomeChave, alvoChave)) pontos += 22000;
+
+  const comuns = quantidadePalavrasEmComum(alvoPalavras, nomePalavras);
+  const coberturaDoAlvo = comuns / alvoPalavras.length;
+  const precisaoDoNome = comuns / Math.max(1, nomePalavras.length);
+
+  pontos += coberturaDoAlvo * 12000;
+  pontos += precisaoDoNome * 4000;
+  pontos -= Math.max(0, nomePalavras.length - alvoPalavras.length) * 250;
 
   return pontos;
 }
 
+function maiorPontuacaoDeNomes(nomes, titulo) {
+  return nomes
+    .map(nome => pontuarCorrespondenciaDeTitulo(nome, titulo))
+    .reduce((maior, atual) => Math.max(maior, atual), -100000);
+}
+
+function pontuarResultadoFilme(item, titulo) {
+  const nomes = [item.title, item.original_title].filter(Boolean);
+  const correspondencia = maiorPontuacaoDeNomes(nomes, titulo);
+  const popularidade = Math.log10(1 + Math.max(0, Number(item.popularity || 0))) * 10;
+  const votos = Math.log10(1 + Math.max(0, Number(item.vote_count || 0))) * 5;
+
+  return correspondencia + popularidade + votos;
+}
+
 function escolherMelhorFilme(resultados, titulo, ano) {
   const porAno = ano ? resultados.filter(item => anoDoFilme(item) === String(ano)) : resultados;
-  const base = porAno.length > 0 ? porAno : resultados;
+  const base = ano ? porAno : resultados;
+
+  if (base.length === 0) {
+    return null;
+  }
 
   return [...base].sort((a, b) => pontuarResultadoFilme(b, titulo) - pontuarResultadoFilme(a, titulo))[0] || null;
 }
 
-async function buscarFilmePorTitulo(titulo, ano) {
+function colecaoCorrespondeExatamenteAoTitulo(colecao, titulo) {
+  const nomeColecao = chaveComparavel(colecao && colecao.name, true);
+  const tituloBuscado = chaveComparavel(titulo, true);
+
+  return Boolean(nomeColecao && tituloBuscado && nomeColecao === tituloBuscado);
+}
+
+async function pesquisarColecoesPorTitulo(titulo) {
+  const urls = [
+    "https://api.themoviedb.org/3/search/collection" +
+      `?api_key=${encodeURIComponent(TMDB_KEY)}` +
+      `&language=pt-BR` +
+      `&query=${encodeURIComponent(titulo)}`,
+    "https://api.themoviedb.org/3/search/collection" +
+      `?api_key=${encodeURIComponent(TMDB_KEY)}` +
+      `&language=en-US` +
+      `&query=${encodeURIComponent(titulo)}`
+  ];
+
+  const buscas = await Promise.all([...new Set(urls)].map(url => tmdbGet(url)));
+  const resultados = buscas.flatMap(busca => busca.results || []);
+
+  return deduplicarPorId(resultados);
+}
+
+async function buscarPrimeiroFilmeDeColecaoExata(titulo) {
+  const colecoes = await pesquisarColecoesPorTitulo(titulo);
+  const colecoesExatas = colecoes.filter(colecao => colecaoCorrespondeExatamenteAoTitulo(colecao, titulo));
+
+  if (colecoesExatas.length === 0) {
+    return null;
+  }
+
+  const colecao = escolherMelhorColecao(colecoesExatas, titulo);
+
+  if (!colecao || !colecao.id) {
+    return null;
+  }
+
+  const detalhesColecaoUrl =
+    `https://api.themoviedb.org/3/collection/${colecao.id}` +
+    `?api_key=${encodeURIComponent(TMDB_KEY)}` +
+    `&language=pt-BR`;
+  const detalhesColecao = await tmdbGet(detalhesColecaoUrl);
+  const partesOrdenadas = ordenarPartesDaColecao(detalhesColecao.parts || []);
+
+  return partesOrdenadas[0] || null;
+}
+
+async function buscarFilmePorTitulo(titulo, ano, opcoes = {}) {
+  const preferirPrimeiroDaColecao = opcoes.preferirPrimeiroDaColecao !== false;
   const urls = [
     "https://api.themoviedb.org/3/search/movie" +
       `?api_key=${encodeURIComponent(TMDB_KEY)}` +
@@ -581,35 +704,36 @@ async function buscarFilmePorTitulo(titulo, ano) {
       (ano ? `&primary_release_year=${encodeURIComponent(ano)}` : "")
   ];
 
-  const resultados = [];
+  const buscas = await Promise.all([...new Set(urls)].map(url => tmdbGet(url)));
+  const resultados = buscas.flatMap(busca => busca.results || []);
 
-  for (const url of urls) {
-    const busca = await tmdbGet(url);
-    resultados.push(...(busca.results || []));
+  if (!ano && preferirPrimeiroDaColecao) {
+    const primeiroDaColecao = await buscarPrimeiroFilmeDeColecaoExata(titulo);
+
+    if (primeiroDaColecao) {
+      return primeiroDaColecao;
+    }
   }
 
   return escolherMelhorFilme(deduplicarPorId(resultados), titulo, ano);
 }
 
 function pontuarResultadoSerie(item, titulo) {
-  const alvo = normalizarTexto(titulo);
-  const nomes = [item.name, item.original_name]
-    .map(normalizarTexto)
-    .filter(Boolean);
+  const nomes = [item.name, item.original_name].filter(Boolean);
+  const correspondencia = maiorPontuacaoDeNomes(nomes, titulo);
+  const popularidade = Math.log10(1 + Math.max(0, Number(item.popularity || 0))) * 10;
+  const votos = Math.log10(1 + Math.max(0, Number(item.vote_count || 0))) * 5;
 
-  let pontos = Number(item.popularity || 0);
-
-  for (const nome of nomes) {
-    if (nome === alvo) pontos += 1000;
-    if (nome.includes(alvo) || alvo.includes(nome)) pontos += 250;
-  }
-
-  return pontos;
+  return correspondencia + popularidade + votos;
 }
 
 function escolherMelhorSerie(resultados, titulo, ano) {
   const porAno = ano ? resultados.filter(item => anoDaSerie(item) === String(ano)) : resultados;
-  const base = porAno.length > 0 ? porAno : resultados;
+  const base = ano ? porAno : resultados;
+
+  if (base.length === 0) {
+    return null;
+  }
 
   return [...base].sort((a, b) => pontuarResultadoSerie(b, titulo) - pontuarResultadoSerie(a, titulo))[0] || null;
 }
@@ -635,28 +759,21 @@ async function buscarSeriePorTitulo(titulo, ano) {
       (ano ? `&first_air_date_year=${encodeURIComponent(ano)}` : "")
   ];
 
-  const resultados = [];
-
-  for (const url of urls) {
-    const busca = await tmdbGet(url);
-    resultados.push(...(busca.results || []));
-  }
+  const buscas = await Promise.all([...new Set(urls)].map(url => tmdbGet(url)));
+  const resultados = buscas.flatMap(busca => busca.results || []);
 
   return escolherMelhorSerie(deduplicarPorId(resultados), titulo, ano);
 }
 
 function pontuarColecao(item, titulo) {
-  const alvo = normalizarTexto(titulo);
-  const nome = normalizarTexto(item.name);
+  const nome = item && item.name;
+  const correspondenciaNormal = pontuarCorrespondenciaDeTitulo(nome, titulo);
+  const correspondenciaSemColecao = pontuarCorrespondenciaDeTitulo(
+    chaveComparavel(nome, true),
+    chaveComparavel(titulo, true)
+  );
 
-  let pontos = 0;
-
-  if (nome === alvo) pontos += 1000;
-  if (nome === `${alvo} collection`) pontos += 1000;
-  if (nome.includes(alvo)) pontos += 500;
-  if (alvo.includes(nome)) pontos += 200;
-
-  return pontos;
+  return Math.max(correspondenciaNormal, correspondenciaSemColecao + 5000);
 }
 
 function escolherMelhorColecao(resultados, titulo) {
@@ -665,17 +782,11 @@ function escolherMelhorColecao(resultados, titulo) {
 }
 
 async function buscarColecaoPorTitulo(titulo) {
-  const buscaColecaoUrl =
-    "https://api.themoviedb.org/3/search/collection" +
-    `?api_key=${encodeURIComponent(TMDB_KEY)}` +
-    `&language=pt-BR` +
-    `&query=${encodeURIComponent(titulo)}`;
-
-  const buscaColecao = await tmdbGet(buscaColecaoUrl);
-  let colecao = escolherMelhorColecao(buscaColecao.results || [], titulo);
+  const colecoes = await pesquisarColecoesPorTitulo(titulo);
+  let colecao = escolherMelhorColecao(colecoes, titulo);
 
   if (!colecao) {
-    const filme = await buscarFilmePorTitulo(titulo, null);
+    const filme = await buscarFilmePorTitulo(titulo, null, { preferirPrimeiroDaColecao: false });
 
     if (filme) {
       const detalhesFilmeUrl =
@@ -977,6 +1088,21 @@ app.get("/api/calculo", async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Servidor rodando na porta ${PORT}`);
+  });
+}
+
+module.exports = {
+  app,
+  detectarTipoEntrada,
+  escolherMelhorFilme,
+  escolherMelhorSerie,
+  buscarFilmePorTitulo,
+  buscarPrimeiroFilmeDeColecaoExata,
+  colecaoCorrespondeExatamenteAoTitulo,
+  pontuarResultadoFilme,
+  pontuarResultadoSerie,
+  separarTituloAnoTemporadaEEpisodios
+};

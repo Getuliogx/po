@@ -33,14 +33,25 @@ teste("mesmo título com outro ano não gera aviso", () => {
   assert.strictEqual(tituloPareceNosResultados(html, "The Gift", 2015), false);
 });
 
-teste("resultado sem ano não é aceito quando o filme possui ano", () => {
+teste("resultado exato sem ano é aceito", () => {
   const html = '<div class="result"><a href="/movie/chicken-run">Chicken Run</a></div>';
-  assert.strictEqual(tituloPareceNosResultados(html, "Chicken Run", 2000), false);
+  assert.strictEqual(tituloPareceNosResultados(html, "Chicken Run", 2000), true);
 });
 
 teste("link da própria pesquisa não é contado como resultado", () => {
   const html = '<a href="/search?q=chicken-run-2000">Chicken Run 2000</a>';
   assert.strictEqual(tituloPareceNosResultados(html, "Chicken Run", 2000), false);
+});
+
+teste("nome da atriz antes do título não impede correspondência", () => {
+  const html = '<div class="result"><a href="/scene/kate-winslet-titanic-nude">Kate Winslet - Titanic Nude Scene</a></div>';
+  assert.strictEqual(tituloPareceNosResultados(html, "Titanic", 1997), true);
+});
+
+teste("texto no-results dentro de script não invalida página", () => {
+  const html = '<script>const empty = "no results";</script><a href="/movie/titanic">Titanic</a>';
+  assert.strictEqual(paginaPareceSemResultado(html), false);
+  assert.strictEqual(tituloPareceNosResultados(html, "Titanic", 1997), true);
 });
 
 
@@ -49,8 +60,8 @@ teste("página sem resultado com recomendações é ignorada", () => {
   assert.strictEqual(paginaPareceSemResultado(html), true);
 });
 
-teste("ano de outro link vizinho não valida o resultado atual", () => {
-  const html = '<a href="/movie/chicken-run">Chicken Run</a><a href="/movie/other-2000">Outro filme (2000)</a>';
+teste("ano correto de outro link vizinho não corrige ano errado do resultado", () => {
+  const html = '<a href="/movie/chicken-run-2023">Chicken Run (2023)</a><a href="/movie/other-2000">Outro filme (2000)</a>';
   assert.strictEqual(tituloPareceNosResultados(html, "Chicken Run", 2000), false);
 });
 

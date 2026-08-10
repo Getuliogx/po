@@ -273,11 +273,10 @@ async function tmdbGet(url) {
 }
 
 function montarUrlsCensura(titulo, ano) {
-  // O ano vai junto na pesquisa para evitar misturar filmes homônimos.
-  const termo = [limparTitulo(titulo), ano ? String(ano) : ""]
-    .filter(Boolean)
-    .join(" ");
-  const q = encodeURIComponent(termo);
+  // Pesquisa pelo título. O ano é usado para validar o resultado quando o
+  // próprio site o informa, mas não é forçado na busca: alguns dos sites
+  // deixam de retornar resultados válidos quando o ano é anexado ao termo.
+  const q = encodeURIComponent(limparTitulo(titulo));
 
   return [
     {
@@ -296,7 +295,9 @@ function montarUrlsCensura(titulo, ano) {
 }
 
 function paginaPareceSemResultado(html) {
-  const texto = normalizarTexto(html);
+  // Só olha o texto visível. Frases como "no results" podem existir em
+  // scripts/templates da página mesmo quando há resultados reais.
+  const texto = normalizarTexto(removerTagsHtml(html));
 
   const frasesSemResultado = [
     "no results",
@@ -436,15 +437,28 @@ function tituloBateExatamenteNoCampo(campo, titulo) {
   const campoNormal = normalizarTexto(campo);
   const campoLimpo = limparCandidatoCensura(campo);
 
-  if (!alvoNormal || alvoNormal.length < 2 || !campoNormal) {
+  if (!alvoNormal || alvoNormal.length < 2 || !campoNormal || !alvoLimpo) {
     return false;
   }
 
-  // Aceita diferenças de artigos e pontuação, mas não aceita subtítulos,
-  // continuações ou recomendações que apenas contenham algumas palavras.
-  return campoNormal === alvoNormal ||
+  // Caso exato: aceita pontuação, artigos e palavras genéricas do próprio
+  // site (nude, scene, movie, gallery etc.).
+  if (
+    campoNormal === alvoNormal ||
     campoLimpo === alvoLimpo ||
-    chaveComparavel(campoLimpo) === chaveComparavel(alvoLimpo);
+    chaveComparavel(campoLimpo) === chaveComparavel(alvoLimpo)
+  ) {
+    return true;
+  }
+
+  // Vários resultados desses sites colocam o nome da atriz/ator antes do
+  // filme. Aceita esse prefixo, mas NÃO aceita palavras extras depois do
+  // título. Isso continua barrando continuações como "Chicken Run Dawn...".
+  if (campoLimpo.endsWith(` ${alvoLimpo}`)) {
+    return true;
+  }
+
+  return false;
 }
 
 function contextoDoLink(html, link, margem = 180) {
@@ -467,6 +481,11 @@ function contextoDoLink(html, link, margem = 180) {
   return removerTagsHtml(pagina.slice(inicio, fim));
 }
 
+function extrairAnosCensura(texto) {
+  const encontrados = String(texto || "").match(/\b(?:18|19|20|21)\d{2}\b/g) || [];
+  return [...new Set(encontrados)];
+}
+
 function linkEhResultadoExato(html, link, titulo, ano) {
   const tituloExato =
     tituloBateExatamenteNoCampo(link.texto, titulo) ||
@@ -480,11 +499,21 @@ function linkEhResultadoExato(html, link, titulo, ano) {
     return true;
   }
 
-  // O ano deve estar no próprio resultado ou imediatamente ao redor dele.
-  // Se o site só sugerir um título parecido ou outra versão, não gera aviso.
-  return textoContemAnoExato(link.texto, ano) ||
-    textoContemAnoExato(link.href, ano) ||
-    textoContemAnoExato(contextoDoLink(html, link), ano);
+  // Se o site informa um ano nesse resultado, ele precisa ser o ano do
+  // título consultado. Se o site não informa ano nenhum, não descarta um
+  // título exato — esse era o falso negativo principal da versão anterior.
+  const anos = [
+    ...extrairAnosCensura(link.texto),
+    ...extrairAnosCensura(link.href),
+    ...extrairAnosCensura(contextoDoLink(html, link))
+  ];
+
+  const anosUnicos = [...new Set(anos)];
+  if (anosUnicos.length === 0) {
+    return true;
+  }
+
+  return anosUnicos.includes(String(ano));
 }
 
 function tituloPareceNosResultados(html, titulo, ano) {
@@ -563,12 +592,14 @@ async function verificarPossivelCensuraPorTitulos(consultas) {
         continue;
       }
 
-      if (paginaPareceSemResultado(html)) {
-        continue;
-      }
-
+      // Primeiro procura um resultado válido. Algumas páginas mantêm textos
+      // de "no results" em templates/áreas secundárias mesmo com resultados.
       if (tituloPareceNosResultados(html, consulta.titulo, consulta.ano)) {
         return true;
+      }
+
+      if (paginaPareceSemResultado(html)) {
+        continue;
       }
     }
   }

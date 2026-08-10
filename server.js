@@ -437,6 +437,142 @@ function tituloPareceNosResultados(html, titulo) {
   return false;
 }
 
+
+function decodificarEntidadesBasicas(texto) {
+  return String(texto || "")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">");
+}
+
+function tornarUrlAbsolutaAZNude(href) {
+  const valor = decodificarEntidadesBasicas(href).trim();
+  if (!valor) return "";
+
+  try {
+    const url = new URL(valor, "https://www.aznude.com/");
+    const host = url.hostname.toLowerCase().replace(/^www\./, "");
+
+    if (host !== "aznude.com") return "";
+    if (!/^\/view\/movie\//i.test(url.pathname)) return "";
+
+    url.hash = "";
+    return url.toString();
+  } catch (err) {
+    return "";
+  }
+}
+
+function extrairTituloPrincipalHtml(html) {
+  const fonte = String(html || "");
+  const h1 = fonte.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i);
+  const title = fonte.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
+
+  return removerTagsHtml((h1 && h1[1]) || (title && title[1]) || "");
+}
+
+function paginaAZNudeBateComSerie(html, titulos) {
+  const principal = extrairTituloPrincipalHtml(html);
+  if (!principal) return false;
+
+  return removerTitulosDuplicados(titulos).some(titulo =>
+    tituloBateNoTexto(principal, titulo)
+  );
+}
+
+function extrairEpisodiosPorTemporadaAZNude(html, temporada) {
+  const texto = removerTagsHtml(html)
+    .replace(/\s+/g, " ")
+    .trim();
+  const temporadaAlvo = Number(temporada);
+  const encontrados = new Set();
+  const regex = /\bSeason\s*(\d{1,3})\s*Episode\s*(\d{1,4})\b/gi;
+  let match;
+
+  while ((match = regex.exec(texto)) !== null) {
+    const temp = Number(match[1]);
+    const ep = Number(match[2]);
+
+    if (temp === temporadaAlvo && Number.isInteger(ep) && ep >= 0) {
+      encontrados.add(ep);
+    }
+  }
+
+  return [...encontrados].sort((a, b) => a - b);
+}
+
+function filtrarEpisodiosCensuraSelecionados(episodiosCensura, episodiosSelecionados) {
+  const permitidos = new Set(
+    (episodiosSelecionados || [])
+      .map(ep => Number(ep && ep.episode_number))
+      .filter(Number.isFinite)
+  );
+
+  if (permitidos.size === 0) {
+    return [...episodiosCensura];
+  }
+
+  return episodiosCensura.filter(ep => permitidos.has(Number(ep)));
+}
+
+async function buscarEpisodiosCensuraAZNude(titulosSerie, temporada, episodiosSelecionados) {
+  if (!CHECK_CENSURA) return [];
+
+  const titulos = removerTitulosDuplicados(titulosSerie);
+  const urlsVisitadas = new Set();
+
+  for (const titulo of titulos) {
+    const buscaUrl = `https://www.aznude.com/search/?q=${encodeURIComponent(titulo)}`;
+    const htmlBusca = await fetchComTimeout(buscaUrl);
+
+    if (!htmlBusca) continue;
+
+    // Em alguns casos a busca já pode devolver/embutir os dados por episódio.
+    const direto = filtrarEpisodiosCensuraSelecionados(
+      extrairEpisodiosPorTemporadaAZNude(htmlBusca, temporada),
+      episodiosSelecionados
+    );
+
+    if (direto.length > 0) {
+      return direto;
+    }
+
+    const candidatos = extrairLinks(htmlBusca)
+      .map(link => ({
+        ...link,
+        url: tornarUrlAbsolutaAZNude(link.href)
+      }))
+      .filter(link => link.url)
+      .filter(link =>
+        titulos.some(nome =>
+          tituloBateNoTexto(link.texto, nome) || tituloBateNoTexto(link.href, nome)
+        )
+      );
+
+    for (const candidato of candidatos.slice(0, 6)) {
+      if (urlsVisitadas.has(candidato.url)) continue;
+      urlsVisitadas.add(candidato.url);
+
+      const htmlPagina = await fetchComTimeout(candidato.url, 8000);
+      if (!htmlPagina) continue;
+      if (!paginaAZNudeBateComSerie(htmlPagina, titulos)) continue;
+
+      const episodiosCensura = filtrarEpisodiosCensuraSelecionados(
+        extrairEpisodiosPorTemporadaAZNude(htmlPagina, temporada),
+        episodiosSelecionados
+      );
+
+      if (episodiosCensura.length > 0) {
+        return episodiosCensura;
+      }
+    }
+  }
+
+  return [];
+}
+
 async function fetchComTimeout(url, timeoutMs = 6500) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -513,7 +649,14 @@ async function verificarPossivelCensuraPorTitulos(titulos) {
   return false;
 }
 
-function adicionarAvisoCensura(resposta, possivelCensura) {
+function adicionarAvisoCensura(resposta, possivelCensura, episodiosCensura = []) {
+  const episodios = [...new Set((episodiosCensura || []).map(Number).filter(Number.isFinite))]
+    .sort((a, b) => a - b);
+
+  if (episodios.length > 0) {
+    return resposta + ` Possível censura verificar: ep ${episodios.join(", ")}.`;
+  }
+
   if (possivelCensura) {
     return resposta + " Possível censura: verificar.";
   }
@@ -890,8 +1033,17 @@ async function responderSerie(titulo, ano, temporada, epInicio, epFim, tipo) {
     }
   }
 
-  const possivelCensura = await verificarPossivelCensuraPorTitulos(titulosParaCensura);
-  return adicionarAvisoCensura(resposta, possivelCensura);
+  const episodiosCensura = await buscarEpisodiosCensuraAZNude(
+    nomesSerie,
+    temporada,
+    episodios
+  );
+
+  const possivelCensura = episodiosCensura.length > 0
+    ? true
+    : await verificarPossivelCensuraPorTitulos(titulosParaCensura);
+
+  return adicionarAvisoCensura(resposta, possivelCensura, episodiosCensura);
 }
 
 async function responderFilme(titulo, ano) {

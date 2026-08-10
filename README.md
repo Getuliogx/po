@@ -60,3 +60,19 @@ Exemplos:
 Se o guia por episódio não estiver disponível, continua usando o aviso genérico antigo das fontes de censura.
 
 `DEBUG_CENSURA=true` é opcional e só serve para mostrar no log qual caminho de consulta foi usado.
+
+## Diagnóstico da censura por episódio
+
+Depois do deploy, para testar diretamente no próprio Render sem depender do StreamElements, abra:
+
+```text
+https://SEU-RENDER.onrender.com/api/debug-censura?titulo=elite&temporada=8
+```
+
+Quando o acesso estiver funcionando, deve retornar `episodios` com:
+
+```text
+[2,3,4,5,7,8]
+```
+
+Esse diagnóstico não muda o comando. Ele existe para mostrar claramente se o Render conseguiu localizar a página da série e ler o guia `By Episode`.

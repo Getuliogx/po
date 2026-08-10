@@ -774,19 +774,27 @@ function pastaAZNudePorTitulo(titulo) {
 }
 
 async function fetchIndiceAZNude(url, timeoutMs = 6000) {
-  // Direto + proxy em paralelo. O Reader renderizado fica reservado para a
-  // página FINAL da série; usá-lo em cada página do índice deixaria o comando
-  // lento demais.
-  const [direto, proxy] = await Promise.all([
+  // IMPORTANTE: o Render pode receber bloqueio do AZNude enquanto o Reader
+  // consegue ler a mesma página pública. Na versão anterior o Reader só era
+  // usado DEPOIS que a URL da série já tinha sido descoberta; portanto, se o
+  // índice falhasse, nunca chegávamos à página final. Agora a descoberta da
+  // URL também tem fallback pelo Reader.
+  const [direto, reader] = await Promise.all([
     fetchAZNudeDireto(url, timeoutMs),
-    fetchAZNudeAllOrigins(url, timeoutMs + 1000)
+    fetchAZNudeRenderizado(url, Math.max(timeoutMs + 4500, 9000))
   ]);
 
   const candidatosDireto = extrairCandidatosAZNude(direto);
-  if (candidatosDireto.length) return direto;
+  if (candidatosDireto.length) {
+    debugCensura("índice AZNude via direto", url, candidatosDireto.length);
+    return direto;
+  }
 
-  const candidatosProxy = extrairCandidatosAZNude(proxy);
-  if (candidatosProxy.length) return proxy;
+  const candidatosReader = extrairCandidatosAZNude(reader);
+  if (candidatosReader.length) {
+    debugCensura("índice AZNude via Reader", url, candidatosReader.length);
+    return reader;
+  }
 
   return "";
 }
@@ -798,16 +806,19 @@ async function tentarPaginaAZNudePelaBusca(titulos) {
       `https://www.aznude.com/search/?q=${q}`,
       `https://www.aznude.com/search?q=${q}`
     ]) {
-      // Não usa o renderizador aqui para não deixar a busca lenta; os outros
-      // caminhos abaixo não dependem da busca interna do site.
-      const [direto, proxy] = await Promise.all([
+      // A busca também precisa do Reader. Sem isso, um 403 no Render fazia a
+      // descoberta morrer antes de chegarmos ao guia By Episode.
+      const [direto, reader] = await Promise.all([
         fetchAZNudeDireto(url, 4500),
-        fetchAZNudeAllOrigins(url, 5500)
+        fetchAZNudeRenderizado(url, 9500)
       ]);
 
-      for (const texto of [direto, proxy]) {
+      for (const [fonte, texto] of [["direto", direto], ["Reader", reader]]) {
         const candidato = acharCandidatoAZNudeExato(extrairCandidatosAZNude(texto), titulos);
-        if (candidato) return candidato.url;
+        if (candidato) {
+          debugCensura("série encontrada pela busca", fonte, titulo, candidato.url);
+          return candidato.url;
+        }
       }
     }
   }
@@ -1478,6 +1489,44 @@ async function responderFilme(titulo, ano) {
   const possivelCensura = await verificarPossivelCensuraPorTitulos(titulosParaCensura);
   return adicionarAvisoCensura(resposta, possivelCensura);
 }
+
+// Diagnóstico simples para conferir o caminho AZNude no próprio Render.
+// Exemplo: /api/debug-censura?titulo=elite&temporada=8
+// Não altera o comando; serve apenas para mostrar claramente se o servidor
+// encontrou a página e quais episódios foram lidos.
+app.get("/api/debug-censura", async (req, res) => {
+  try {
+    const titulo = limparTitulo(req.query.titulo);
+    const temporada = Number(req.query.temporada);
+
+    if (!titulo || !Number.isInteger(temporada) || temporada < 0) {
+      return res.status(400).json({ ok: false, erro: "Use titulo e temporada. Ex.: ?titulo=elite&temporada=8" });
+    }
+
+    // Não reutiliza um MISS antigo durante o diagnóstico.
+    CACHE_AZNUDE_URL.delete(normalizarTexto(titulo));
+
+    const url = await resolverPaginaAZNudeSerie([titulo]);
+    if (!url) {
+      return res.json({ ok: false, titulo, temporada, etapa: "localizar-serie", url: "", episodios: [] });
+    }
+
+    CACHE_AZNUDE_EPISODIOS.delete(url);
+    const mapa = await carregarMapaEpisodiosAZNude(url);
+    const episodios = episodiosDaTemporadaNoMapa(mapa, temporada);
+
+    return res.json({
+      ok: episodios.length > 0,
+      titulo,
+      temporada,
+      etapa: episodios.length ? "concluido" : "ler-guia",
+      url,
+      episodios
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, erro: err && err.message ? err.message : String(err) });
+  }
+});
 
 app.get("/api/calculo", async (req, res) => {
   try {

@@ -43,26 +43,17 @@ temp 1
 
 Observação: número simples no final só vira temporada quando você usa `serie`, `anime` ou `desenho`. Assim filmes como `Premonição 2`, `Gente Grande 2` e `Distrito 9` não são confundidos com temporada.
 
-## Aviso de censura por episódio
-
-Para séries, animes e desenhos, quando o AZNude informar a temporada e o episódio na página da obra, o comando lista somente os episódios marcados da temporada consultada.
-
-Exemplo de saída:
-
-```text
-Possível censura verificar: ep 2, 3, 4.
-```
-
-Se você calcular apenas uma faixa, por exemplo:
+## Episódios específicos
 
 ```text
 !calculo serie elite EP1 ao 5 T8
+!calculo anime nome do anime EP2 ao 6 T1
 ```
 
-o aviso considera somente os episódios dentro de EP1 a EP5. Se o site indicar episódios fora dessa faixa, eles não aparecem no aviso.
-
-Se o site não fornecer a informação por episódio, continua valendo o aviso antigo genérico:
+Quando o AZNude tiver o guia por episódio para a série/temporada, a resposta inclui os episódios encontrados, por exemplo:
 
 ```text
-Possível censura: verificar.
+Possível censura verificar: ep 2, 3, 4, 5.
 ```
+
+A busca tenta primeiro a pesquisa normal do AZNude e, se ela não localizar a página, usa também o índice "Series with Episode Guides" do próprio AZNude.

@@ -38,7 +38,6 @@ function normalizarTexto(texto) {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/&amp;/g, "and")
-    .replace(/&/g, " e ")
     .replace(/&quot;/g, "")
     .replace(/&#39;/g, "")
     .replace(/&nbsp;/g, " ")
@@ -272,11 +271,8 @@ async function tmdbGet(url) {
   return resp.json();
 }
 
-function montarUrlsCensura(titulo, ano) {
-  // Pesquisa pelo título. O ano é usado para validar o resultado quando o
-  // próprio site o informa, mas não é forçado na busca: alguns dos sites
-  // deixam de retornar resultados válidos quando o ano é anexado ao termo.
-  const q = encodeURIComponent(limparTitulo(titulo));
+function montarUrlsCensura(titulo) {
+  const q = encodeURIComponent(titulo);
 
   return [
     {
@@ -295,9 +291,7 @@ function montarUrlsCensura(titulo, ano) {
 }
 
 function paginaPareceSemResultado(html) {
-  // Só olha o texto visível. Frases como "no results" podem existir em
-  // scripts/templates da página mesmo quando há resultados reais.
-  const texto = normalizarTexto(removerTagsHtml(html));
+  const texto = normalizarTexto(html);
 
   const frasesSemResultado = [
     "no results",
@@ -348,9 +342,7 @@ function extrairLinks(html) {
 
     links.push({
       href,
-      texto,
-      inicio: match.index,
-      fim: regex.lastIndex
+      texto
     });
   }
 
@@ -384,11 +376,7 @@ function linkPareceResultadoReal(link) {
     "forgot",
     "logout",
     "about",
-    "advertise",
-    "/search",
-    "search?",
-    "searchstring=",
-    "?q="
+    "advertise"
   ];
 
   if (bloqueados.some(item => href.includes(item))) {
@@ -402,130 +390,51 @@ function linkPareceResultadoReal(link) {
   return true;
 }
 
-const PALAVRAS_GENERICAS_CENSURA = new Set([
-  "nude", "nudes", "nudity", "scene", "scenes", "sex", "sexy",
-  "clip", "clips", "video", "videos", "photo", "photos", "picture", "pictures",
-  "gallery", "galleries", "movie", "movies", "film", "films", "cinema",
-  "watch", "online", "archive", "tour", "page", "pages", "title", "titles",
-  "cast", "review", "reviews", "celebrity", "celebrities", "actress", "actresses",
-  "actor", "actors", "mrskin", "aznude", "celebritymoviearchive", "cma",
-  "www", "com", "https", "http", "html", "htm", "view", "content"
-]);
+function tituloBateNoTexto(texto, titulo) {
+  const textoNormal = normalizarTexto(texto);
+  const tituloNormal = normalizarTexto(titulo);
+  const slugTitulo = criarSlug(titulo);
 
-function textoContemAnoExato(texto, ano) {
-  if (!ano) {
-    return true;
-  }
-
-  const anoTexto = String(ano);
-  const normal = normalizarTexto(texto);
-  return normal.split(" ").includes(anoTexto);
-}
-
-function limparCandidatoCensura(texto) {
-  return normalizarTexto(texto)
-    .split(" ")
-    .filter(Boolean)
-    .filter(palavra => !/^(?:18|19|20|21)\d{2}$/.test(palavra))
-    .filter(palavra => !PALAVRAS_GENERICAS_CENSURA.has(palavra))
-    .join(" ");
-}
-
-function tituloBateExatamenteNoCampo(campo, titulo) {
-  const alvoNormal = normalizarTexto(titulo);
-  const alvoLimpo = limparCandidatoCensura(titulo);
-  const campoNormal = normalizarTexto(campo);
-  const campoLimpo = limparCandidatoCensura(campo);
-
-  if (!alvoNormal || alvoNormal.length < 2 || !campoNormal || !alvoLimpo) {
+  if (!textoNormal || !tituloNormal || tituloNormal.length < 3) {
     return false;
   }
 
-  // Caso exato: aceita pontuação, artigos e palavras genéricas do próprio
-  // site (nude, scene, movie, gallery etc.).
-  if (
-    campoNormal === alvoNormal ||
-    campoLimpo === alvoLimpo ||
-    chaveComparavel(campoLimpo) === chaveComparavel(alvoLimpo)
-  ) {
+  if (textoNormal.includes(tituloNormal)) {
     return true;
   }
 
-  // Vários resultados desses sites colocam o nome da atriz/ator antes do
-  // filme. Aceita esse prefixo, mas NÃO aceita palavras extras depois do
-  // título. Isso continua barrando continuações como "Chicken Run Dawn...".
-  if (campoLimpo.endsWith(` ${alvoLimpo}`)) {
+  const textoComoSlug = textoNormal.replace(/\s+/g, "-");
+
+  if (slugTitulo && textoComoSlug.includes(slugTitulo)) {
     return true;
   }
 
   return false;
 }
 
-function contextoDoLink(html, link, margem = 180) {
-  const pagina = String(html || "");
-  let inicio = Math.max(0, Number(link.inicio || 0) - margem);
-  let fim = Math.min(pagina.length, Number(link.fim || 0) + margem);
-
-  // Não deixa o ano de outro cartão/link vizinho validar o filme atual.
-  const fechamentoAnterior = pagina.lastIndexOf("</a>", Number(link.inicio || 0) - 1);
-  const proximaAncora = pagina.indexOf("<a", Number(link.fim || 0));
-
-  if (fechamentoAnterior >= inicio) {
-    inicio = fechamentoAnterior + 4;
-  }
-
-  if (proximaAncora >= 0 && proximaAncora < fim) {
-    fim = proximaAncora;
-  }
-
-  return removerTagsHtml(pagina.slice(inicio, fim));
-}
-
-function extrairAnosCensura(texto) {
-  const encontrados = String(texto || "").match(/\b(?:18|19|20|21)\d{2}\b/g) || [];
-  return [...new Set(encontrados)];
-}
-
-function linkEhResultadoExato(html, link, titulo, ano) {
-  const tituloExato =
-    tituloBateExatamenteNoCampo(link.texto, titulo) ||
-    tituloBateExatamenteNoCampo(link.href, titulo);
-
-  if (!tituloExato) {
-    return false;
-  }
-
-  if (!ano) {
-    return true;
-  }
-
-  // Se o site informa um ano nesse resultado, ele precisa ser o ano do
-  // título consultado. Se o site não informa ano nenhum, não descarta um
-  // título exato — esse era o falso negativo principal da versão anterior.
-  const anos = [
-    ...extrairAnosCensura(link.texto),
-    ...extrairAnosCensura(link.href),
-    ...extrairAnosCensura(contextoDoLink(html, link))
-  ];
-
-  const anosUnicos = [...new Set(anos)];
-  if (anosUnicos.length === 0) {
-    return true;
-  }
-
-  return anosUnicos.includes(String(ano));
-}
-
-function tituloPareceNosResultados(html, titulo, ano) {
+function tituloPareceNosResultados(html, titulo) {
   const tituloNormal = normalizarTexto(titulo);
 
-  if (!tituloNormal || tituloNormal.length < 2) {
+  if (!tituloNormal || tituloNormal.length < 3) {
     return false;
   }
 
   const links = extrairLinks(html).filter(linkPareceResultadoReal);
 
-  return links.some(link => linkEhResultadoExato(html, link, titulo, ano));
+  for (const link of links) {
+    const href = String(link.href || "");
+    const texto = String(link.texto || "");
+
+    if (tituloBateNoTexto(texto, titulo)) {
+      return true;
+    }
+
+    if (tituloBateNoTexto(href, titulo)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 async function fetchComTimeout(url, timeoutMs = 6500) {
@@ -555,35 +464,34 @@ async function fetchComTimeout(url, timeoutMs = 6500) {
   }
 }
 
-function normalizarConsultasCensura(consultas) {
+function removerTitulosDuplicados(titulos) {
   const vistos = new Set();
   const lista = [];
 
-  for (const item of consultas || []) {
-    const titulo = limparTitulo(typeof item === "string" ? item : item && item.titulo);
-    const ano = typeof item === "object" && item && item.ano ? String(item.ano) : "";
-    const chave = `${normalizarTexto(titulo)}|${ano}`;
+  for (const titulo of titulos) {
+    const limpo = limparTitulo(titulo);
+    const chave = normalizarTexto(limpo);
 
-    if (!titulo || !normalizarTexto(titulo) || vistos.has(chave)) {
+    if (!limpo || !chave || vistos.has(chave)) {
       continue;
     }
 
     vistos.add(chave);
-    lista.push({ titulo, ano });
+    lista.push(limpo);
   }
 
   return lista;
 }
 
-async function verificarPossivelCensuraPorTitulos(consultas) {
+async function verificarPossivelCensuraPorTitulos(titulos) {
   if (!CHECK_CENSURA) {
     return false;
   }
 
-  const lista = normalizarConsultasCensura(consultas);
+  const listaTitulos = removerTitulosDuplicados(titulos);
 
-  for (const consulta of lista) {
-    const buscas = montarUrlsCensura(consulta.titulo, consulta.ano);
+  for (const titulo of listaTitulos) {
+    const buscas = montarUrlsCensura(titulo);
 
     for (const busca of buscas) {
       const html = await fetchComTimeout(busca.url);
@@ -592,14 +500,12 @@ async function verificarPossivelCensuraPorTitulos(consultas) {
         continue;
       }
 
-      // Primeiro procura um resultado válido. Algumas páginas mantêm textos
-      // de "no results" em templates/áreas secundárias mesmo com resultados.
-      if (tituloPareceNosResultados(html, consulta.titulo, consulta.ano)) {
-        return true;
-      }
-
       if (paginaPareceSemResultado(html)) {
         continue;
+      }
+
+      if (tituloPareceNosResultados(html, titulo)) {
+        return true;
       }
     }
   }
@@ -631,166 +537,30 @@ function deduplicarPorId(lista) {
   return saida;
 }
 
-const PALAVRAS_DE_LIGACAO = new Set([
-  "a", "as", "o", "os", "um", "uma", "uns", "umas",
-  "de", "da", "das", "do", "dos", "e", "and", "of",
-  "the", "an", "el", "la", "las", "los"
-]);
+function pontuarResultadoFilme(item, titulo) {
+  const alvo = normalizarTexto(titulo);
+  const nomes = [item.title, item.original_title]
+    .map(normalizarTexto)
+    .filter(Boolean);
 
-const PALAVRAS_DE_COLECAO = new Set([
-  "colecao", "colecoes", "collection", "collections",
-  "saga", "franquia", "franchise", "trilogia", "trilogy",
-  "quadrilogia", "filme", "filmes", "movie", "movies"
-]);
+  let pontos = Number(item.popularity || 0);
 
-function palavrasComparaveis(texto, removerPalavrasDeColecao = false) {
-  return normalizarTexto(texto)
-    .split(" ")
-    .filter(Boolean)
-    .filter(palavra => !PALAVRAS_DE_LIGACAO.has(palavra))
-    .filter(palavra => !removerPalavrasDeColecao || !PALAVRAS_DE_COLECAO.has(palavra));
-}
-
-function chaveComparavel(texto, removerPalavrasDeColecao = false) {
-  return palavrasComparaveis(texto, removerPalavrasDeColecao).join(" ");
-}
-
-function quantidadePalavrasEmComum(a, b) {
-  const conjuntoB = new Set(b);
-  return a.filter(palavra => conjuntoB.has(palavra)).length;
-}
-
-function contemSequenciaCompleta(frase, trecho) {
-  if (!frase || !trecho) {
-    return false;
+  for (const nome of nomes) {
+    if (nome === alvo) pontos += 1000;
+    if (nome.includes(alvo) || alvo.includes(nome)) pontos += 250;
   }
-
-  return ` ${frase} `.includes(` ${trecho} `);
-}
-
-function pontuarCorrespondenciaDeTitulo(nome, titulo) {
-  const nomeNormal = normalizarTexto(nome);
-  const alvoNormal = normalizarTexto(titulo);
-  const nomePalavras = palavrasComparaveis(nome);
-  const alvoPalavras = palavrasComparaveis(titulo);
-  const nomeChave = nomePalavras.join(" ");
-  const alvoChave = alvoPalavras.join(" ");
-
-  if (!nomeNormal || !alvoNormal || alvoPalavras.length === 0) {
-    return -100000;
-  }
-
-  let pontos = 0;
-
-  if (nomeNormal === alvoNormal) pontos += 100000;
-  if (nomeChave === alvoChave) pontos += 90000;
-  if (nomeNormal.startsWith(`${alvoNormal} `)) pontos += 50000;
-  if (nomeChave.startsWith(`${alvoChave} `)) pontos += 45000;
-  if (contemSequenciaCompleta(nomeNormal, alvoNormal)) pontos += 25000;
-  if (contemSequenciaCompleta(nomeChave, alvoChave)) pontos += 22000;
-
-  const comuns = quantidadePalavrasEmComum(alvoPalavras, nomePalavras);
-  const coberturaDoAlvo = comuns / alvoPalavras.length;
-  const precisaoDoNome = comuns / Math.max(1, nomePalavras.length);
-
-  pontos += coberturaDoAlvo * 12000;
-  pontos += precisaoDoNome * 4000;
-  pontos -= Math.max(0, nomePalavras.length - alvoPalavras.length) * 250;
 
   return pontos;
 }
 
-function maiorPontuacaoDeNomes(nomes, titulo) {
-  return nomes
-    .map(nome => pontuarCorrespondenciaDeTitulo(nome, titulo))
-    .reduce((maior, atual) => Math.max(maior, atual), -100000);
-}
-
-function pontuarResultadoFilme(item, titulo) {
-  const nomes = [item.title, item.original_title].filter(Boolean);
-  const correspondencia = maiorPontuacaoDeNomes(nomes, titulo);
-  const popularidade = Math.log10(1 + Math.max(0, Number(item.popularity || 0))) * 10;
-  const votos = Math.log10(1 + Math.max(0, Number(item.vote_count || 0))) * 5;
-
-  return correspondencia + popularidade + votos;
-}
-
-function resultadoTemTituloExato(nomes, titulo) {
-  const alvoNormal = normalizarTexto(titulo);
-  const alvoChave = chaveComparavel(titulo);
-
-  return (nomes || []).filter(Boolean).some(nome => {
-    return normalizarTexto(nome) === alvoNormal || chaveComparavel(nome) === alvoChave;
-  });
-}
-
 function escolherMelhorFilme(resultados, titulo, ano) {
   const porAno = ano ? resultados.filter(item => anoDoFilme(item) === String(ano)) : resultados;
-  let base = ano ? porAno : resultados;
-
-  if (ano) {
-    // Com ano informado, uma recomendação apenas parecida não é aceita.
-    base = base.filter(item => resultadoTemTituloExato([item.title, item.original_title], titulo));
-  }
-
-  if (base.length === 0) {
-    return null;
-  }
+  const base = porAno.length > 0 ? porAno : resultados;
 
   return [...base].sort((a, b) => pontuarResultadoFilme(b, titulo) - pontuarResultadoFilme(a, titulo))[0] || null;
 }
 
-function colecaoCorrespondeExatamenteAoTitulo(colecao, titulo) {
-  const nomeColecao = chaveComparavel(colecao && colecao.name, true);
-  const tituloBuscado = chaveComparavel(titulo, true);
-
-  return Boolean(nomeColecao && tituloBuscado && nomeColecao === tituloBuscado);
-}
-
-async function pesquisarColecoesPorTitulo(titulo) {
-  const urls = [
-    "https://api.themoviedb.org/3/search/collection" +
-      `?api_key=${encodeURIComponent(TMDB_KEY)}` +
-      `&language=pt-BR` +
-      `&query=${encodeURIComponent(titulo)}`,
-    "https://api.themoviedb.org/3/search/collection" +
-      `?api_key=${encodeURIComponent(TMDB_KEY)}` +
-      `&language=en-US` +
-      `&query=${encodeURIComponent(titulo)}`
-  ];
-
-  const buscas = await Promise.all([...new Set(urls)].map(url => tmdbGet(url)));
-  const resultados = buscas.flatMap(busca => busca.results || []);
-
-  return deduplicarPorId(resultados);
-}
-
-async function buscarPrimeiroFilmeDeColecaoExata(titulo) {
-  const colecoes = await pesquisarColecoesPorTitulo(titulo);
-  const colecoesExatas = colecoes.filter(colecao => colecaoCorrespondeExatamenteAoTitulo(colecao, titulo));
-
-  if (colecoesExatas.length === 0) {
-    return null;
-  }
-
-  const colecao = escolherMelhorColecao(colecoesExatas, titulo);
-
-  if (!colecao || !colecao.id) {
-    return null;
-  }
-
-  const detalhesColecaoUrl =
-    `https://api.themoviedb.org/3/collection/${colecao.id}` +
-    `?api_key=${encodeURIComponent(TMDB_KEY)}` +
-    `&language=pt-BR`;
-  const detalhesColecao = await tmdbGet(detalhesColecaoUrl);
-  const partesOrdenadas = ordenarPartesDaColecao(detalhesColecao.parts || []);
-
-  return partesOrdenadas[0] || null;
-}
-
-async function buscarFilmePorTitulo(titulo, ano, opcoes = {}) {
-  const preferirPrimeiroDaColecao = opcoes.preferirPrimeiroDaColecao !== false;
+async function buscarFilmePorTitulo(titulo, ano) {
   const urls = [
     "https://api.themoviedb.org/3/search/movie" +
       `?api_key=${encodeURIComponent(TMDB_KEY)}` +
@@ -811,40 +581,35 @@ async function buscarFilmePorTitulo(titulo, ano, opcoes = {}) {
       (ano ? `&primary_release_year=${encodeURIComponent(ano)}` : "")
   ];
 
-  const buscas = await Promise.all([...new Set(urls)].map(url => tmdbGet(url)));
-  const resultados = buscas.flatMap(busca => busca.results || []);
+  const resultados = [];
 
-  if (!ano && preferirPrimeiroDaColecao) {
-    const primeiroDaColecao = await buscarPrimeiroFilmeDeColecaoExata(titulo);
-
-    if (primeiroDaColecao) {
-      return primeiroDaColecao;
-    }
+  for (const url of urls) {
+    const busca = await tmdbGet(url);
+    resultados.push(...(busca.results || []));
   }
 
   return escolherMelhorFilme(deduplicarPorId(resultados), titulo, ano);
 }
 
 function pontuarResultadoSerie(item, titulo) {
-  const nomes = [item.name, item.original_name].filter(Boolean);
-  const correspondencia = maiorPontuacaoDeNomes(nomes, titulo);
-  const popularidade = Math.log10(1 + Math.max(0, Number(item.popularity || 0))) * 10;
-  const votos = Math.log10(1 + Math.max(0, Number(item.vote_count || 0))) * 5;
+  const alvo = normalizarTexto(titulo);
+  const nomes = [item.name, item.original_name]
+    .map(normalizarTexto)
+    .filter(Boolean);
 
-  return correspondencia + popularidade + votos;
+  let pontos = Number(item.popularity || 0);
+
+  for (const nome of nomes) {
+    if (nome === alvo) pontos += 1000;
+    if (nome.includes(alvo) || alvo.includes(nome)) pontos += 250;
+  }
+
+  return pontos;
 }
 
 function escolherMelhorSerie(resultados, titulo, ano) {
   const porAno = ano ? resultados.filter(item => anoDaSerie(item) === String(ano)) : resultados;
-  let base = ano ? porAno : resultados;
-
-  if (ano) {
-    base = base.filter(item => resultadoTemTituloExato([item.name, item.original_name], titulo));
-  }
-
-  if (base.length === 0) {
-    return null;
-  }
+  const base = porAno.length > 0 ? porAno : resultados;
 
   return [...base].sort((a, b) => pontuarResultadoSerie(b, titulo) - pontuarResultadoSerie(a, titulo))[0] || null;
 }
@@ -870,21 +635,28 @@ async function buscarSeriePorTitulo(titulo, ano) {
       (ano ? `&first_air_date_year=${encodeURIComponent(ano)}` : "")
   ];
 
-  const buscas = await Promise.all([...new Set(urls)].map(url => tmdbGet(url)));
-  const resultados = buscas.flatMap(busca => busca.results || []);
+  const resultados = [];
+
+  for (const url of urls) {
+    const busca = await tmdbGet(url);
+    resultados.push(...(busca.results || []));
+  }
 
   return escolherMelhorSerie(deduplicarPorId(resultados), titulo, ano);
 }
 
 function pontuarColecao(item, titulo) {
-  const nome = item && item.name;
-  const correspondenciaNormal = pontuarCorrespondenciaDeTitulo(nome, titulo);
-  const correspondenciaSemColecao = pontuarCorrespondenciaDeTitulo(
-    chaveComparavel(nome, true),
-    chaveComparavel(titulo, true)
-  );
+  const alvo = normalizarTexto(titulo);
+  const nome = normalizarTexto(item.name);
 
-  return Math.max(correspondenciaNormal, correspondenciaSemColecao + 5000);
+  let pontos = 0;
+
+  if (nome === alvo) pontos += 1000;
+  if (nome === `${alvo} collection`) pontos += 1000;
+  if (nome.includes(alvo)) pontos += 500;
+  if (alvo.includes(nome)) pontos += 200;
+
+  return pontos;
 }
 
 function escolherMelhorColecao(resultados, titulo) {
@@ -893,11 +665,17 @@ function escolherMelhorColecao(resultados, titulo) {
 }
 
 async function buscarColecaoPorTitulo(titulo) {
-  const colecoes = await pesquisarColecoesPorTitulo(titulo);
-  let colecao = escolherMelhorColecao(colecoes, titulo);
+  const buscaColecaoUrl =
+    "https://api.themoviedb.org/3/search/collection" +
+    `?api_key=${encodeURIComponent(TMDB_KEY)}` +
+    `&language=pt-BR` +
+    `&query=${encodeURIComponent(titulo)}`;
+
+  const buscaColecao = await tmdbGet(buscaColecaoUrl);
+  let colecao = escolherMelhorColecao(buscaColecao.results || [], titulo);
 
   if (!colecao) {
-    const filme = await buscarFilmePorTitulo(titulo, null, { preferirPrimeiroDaColecao: false });
+    const filme = await buscarFilmePorTitulo(titulo, null);
 
     if (filme) {
       const detalhesFilmeUrl =
@@ -977,7 +755,7 @@ async function responderColetanea(entradaColetanea) {
   let filmesComDuracao = 0;
   let filmesSemDuracao = 0;
   const nomesFilmes = [];
-  const titulosParaCensura = [];
+  const titulosParaCensura = [colecao.name, titulo];
 
   for (const parte of partesSelecionadas) {
     const detalhesUrl =
@@ -988,13 +766,7 @@ async function responderColetanea(entradaColetanea) {
     const nome = detalhes.title || parte.title || parte.original_title;
 
     nomesFilmes.push(nome);
-    const anoParte = anoDoFilme(detalhes) || anoDoFilme(parte);
-    titulosParaCensura.push(
-      { titulo: detalhes.original_title, ano: anoParte },
-      { titulo: parte.original_title, ano: anoParte },
-      { titulo: detalhes.title, ano: anoParte },
-      { titulo: parte.title, ano: anoParte }
-    );
+    titulosParaCensura.push(detalhes.original_title, parte.original_title, detalhes.title, parte.title);
 
     if (detalhes.runtime && detalhes.runtime > 0) {
       totalMinutos += detalhes.runtime;
@@ -1087,29 +859,34 @@ async function responderSerie(titulo, ano, temporada, epInicio, epFim, tipo) {
     resposta += ` Obs: ${episodiosSemDuracao} episódio(s) sem minutagem no TMDB.`;
   }
 
-  const nomesSerie = [
+  const nomesSerie = removerTitulosDuplicados([
     serie.original_name,
     serie.name,
     titulo
-  ].filter(Boolean);
+  ]);
 
   const nomesEpisodios = episodios
     .map(ep => ep.name)
     .filter(Boolean);
 
   const titulosParaCensura = [];
-  const anoCensuraSerie = anoDaSerie(serie) || ano || "";
 
   for (const nomeSerie of nomesSerie) {
-    titulosParaCensura.push({ titulo: nomeSerie, ano: anoCensuraSerie });
-    titulosParaCensura.push({ titulo: `${nomeSerie} season ${temporada}`, ano: anoCensuraSerie });
-    titulosParaCensura.push({ titulo: `${nomeSerie} temporada ${temporada}`, ano: anoCensuraSerie });
+    titulosParaCensura.push(nomeSerie);
+    titulosParaCensura.push(`${nomeSerie} season ${temporada}`);
+    titulosParaCensura.push(`${nomeSerie} temporada ${temporada}`);
   }
 
   for (const nomeSerie of nomesSerie) {
     for (const nomeEp of nomesEpisodios) {
-      titulosParaCensura.push({ titulo: `${nomeSerie} ${nomeEp}`, ano: anoCensuraSerie });
-      titulosParaCensura.push({ titulo: `${nomeSerie} - ${nomeEp}`, ano: anoCensuraSerie });
+      titulosParaCensura.push(`${nomeSerie} ${nomeEp}`);
+      titulosParaCensura.push(`${nomeSerie} - ${nomeEp}`);
+    }
+  }
+
+  for (const nomeEp of nomesEpisodios) {
+    if (normalizarTexto(nomeEp).length >= 5) {
+      titulosParaCensura.push(nomeEp);
     }
   }
 
@@ -1145,11 +922,11 @@ async function responderFilme(titulo, ano) {
     `${minutos} minutos. Valor: ${valorBR} / `;
 
   const titulosParaCensura = [
-    { titulo: detalhesFilme.original_title, ano: anoFilme },
-    { titulo: filme.original_title, ano: anoFilme },
-    { titulo: detalhesFilme.title, ano: anoFilme },
-    { titulo: filme.title, ano: anoFilme },
-    { titulo, ano: anoFilme }
+    detalhesFilme.original_title,
+    filme.original_title,
+    detalhesFilme.title,
+    filme.title,
+    titulo
   ];
 
   const possivelCensura = await verificarPossivelCensuraPorTitulos(titulosParaCensura);
@@ -1200,27 +977,6 @@ app.get("/api/calculo", async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 
-if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`Servidor rodando na porta ${PORT}`);
-  });
-}
-
-module.exports = {
-  app,
-  detectarTipoEntrada,
-  escolherMelhorFilme,
-  escolherMelhorSerie,
-  buscarFilmePorTitulo,
-  buscarPrimeiroFilmeDeColecaoExata,
-  colecaoCorrespondeExatamenteAoTitulo,
-  pontuarResultadoFilme,
-  pontuarResultadoSerie,
-  separarTituloAnoTemporadaEEpisodios,
-  tituloPareceNosResultados,
-  tituloBateExatamenteNoCampo,
-  linkEhResultadoExato,
-  normalizarConsultasCensura,
-  resultadoTemTituloExato,
-  paginaPareceSemResultado
-};
+app.listen(PORT, () => {
+  console.log(`Servidor rodando na porta ${PORT}`);
+});

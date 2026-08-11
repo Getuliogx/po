@@ -42,3 +42,11 @@ temp 1
 ```
 
 Observação: número simples no final só vira temporada quando você usa `serie`, `anime` ou `desenho`. Assim filmes como `Premonição 2`, `Gente Grande 2` e `Distrito 9` não são confundidos com temporada.
+
+## Aviso de possível censura
+
+Quando o sistema encontra indícios de cenas sensíveis (principalmente no AZNude), a resposta inclui um aviso:
+
+- Filmes / coletâneas: `Possível censura: verificar.`
+- Séries / animes / desenhos: se conseguir identificar os episódios da temporada, mostra algo como  
+  `Possível censura verificar: ep 2, 3, 4, 8`

@@ -483,12 +483,69 @@ function removerTitulosDuplicados(titulos) {
   return lista;
 }
 
-async function verificarPossivelCensuraPorTitulos(titulos) {
+function extrairLinksAznudeSerie(html, titulo) {
+  const links = extrairLinks(html).filter(linkPareceResultadoReal);
+  const candidatos = [];
+
+  for (const link of links) {
+    const href = String(link.href || "");
+    const texto = String(link.texto || "");
+
+    if (!href.includes("/view/movie/") && !href.includes("/viewmovie/")) {
+      continue;
+    }
+
+    if (tituloBateNoTexto(texto, titulo) || tituloBateNoTexto(href, titulo)) {
+      let urlCompleta = href;
+      if (href.startsWith("/")) {
+        urlCompleta = "https://www.aznude.com" + href;
+      } else if (!href.startsWith("http")) {
+        urlCompleta = "https://www.aznude.com/" + href;
+      }
+      candidatos.push(urlCompleta);
+    }
+  }
+
+  return [...new Set(candidatos)];
+}
+
+function extrairEpisodiosAznude(html, temporadaAlvo = null) {
+  const episodios = new Set();
+  // Formatos comuns: "Season 8 Episode 8", "S08E08", "Season 8 Ep 8", etc.
+  const regexes = [
+    /Season\s*(\d+)\s*Episode\s*(\d+)/gi,
+    /S(?:eason)?\s*0*(\d+)\s*E(?:p(?:isode)?)?\s*0*(\d+)/gi,
+    /Temporada\s*(\d+)\s*Epis[oó]dio\s*(\d+)/gi
+  ];
+
+  for (const regex of regexes) {
+    let match;
+    while ((match = regex.exec(html)) !== null) {
+      const season = Number(match[1]);
+      const ep = Number(match[2]);
+      if (!Number.isFinite(season) || !Number.isFinite(ep) || ep < 1) continue;
+      if (temporadaAlvo === null || season === Number(temporadaAlvo)) {
+        episodios.add(ep);
+      }
+    }
+  }
+
+  return [...episodios].sort((a, b) => a - b);
+}
+
+/**
+ * Retorna { possivel: boolean, episodios: number[] }
+ * episodios só é preenchido quando consegue extrair da página do AZNude
+ * para a temporada informada (ou todas se temporada for null).
+ */
+async function verificarPossivelCensuraPorTitulos(titulos, temporada = null) {
   if (!CHECK_CENSURA) {
-    return false;
+    return { possivel: false, episodios: [] };
   }
 
   const listaTitulos = removerTitulosDuplicados(titulos);
+  let encontrou = false;
+  let episodiosEncontrados = [];
 
   for (const titulo of listaTitulos) {
     const buscas = montarUrlsCensura(titulo);
@@ -504,21 +561,54 @@ async function verificarPossivelCensuraPorTitulos(titulos) {
         continue;
       }
 
-      if (tituloPareceNosResultados(html, titulo)) {
-        return true;
+      if (!tituloPareceNosResultados(html, titulo)) {
+        continue;
+      }
+
+      encontrou = true;
+
+      // Só tenta extrair episódios no AZNude (tem a aba "By Episode")
+      if (busca.nome === "aznude") {
+        const paginasSerie = extrairLinksAznudeSerie(html, titulo);
+
+        // Se a própria página de busca já listar episódios, usa
+        let eps = extrairEpisodiosAznude(html, temporada);
+        if (eps.length > 0) {
+          episodiosEncontrados = [...new Set([...episodiosEncontrados, ...eps])].sort((a, b) => a - b);
+        }
+
+        // Segue o link da série/filme e extrai os episódios de lá
+        for (const paginaUrl of paginasSerie.slice(0, 3)) {
+          const htmlPagina = await fetchComTimeout(paginaUrl, 8000);
+          if (!htmlPagina) continue;
+
+          const epsPagina = extrairEpisodiosAznude(htmlPagina, temporada);
+          if (epsPagina.length > 0) {
+            episodiosEncontrados = [...new Set([...episodiosEncontrados, ...epsPagina])].sort((a, b) => a - b);
+          }
+        }
       }
     }
   }
 
-  return false;
+  return {
+    possivel: encontrou,
+    episodios: episodiosEncontrados
+  };
 }
 
-function adicionarAvisoCensura(resposta, possivelCensura) {
-  if (possivelCensura) {
-    return resposta + " Possível censura: verificar.";
+function adicionarAvisoCensura(resposta, resultadoCensura) {
+  if (!resultadoCensura || !resultadoCensura.possivel) {
+    return resposta;
   }
 
-  return resposta;
+  const eps = resultadoCensura.episodios || [];
+  if (eps.length > 0) {
+    const listaEps = eps.join(", ");
+    return resposta + ` Possível censura verificar: ep ${listaEps}`;
+  }
+
+  return resposta + " Possível censura: verificar.";
 }
 
 function deduplicarPorId(lista) {
@@ -794,7 +884,7 @@ async function responderColetanea(entradaColetanea) {
     resposta += ` Obs: ${filmesSemDuracao} filme(s) sem minutagem no TMDB.`;
   }
 
-  const possivelCensura = await verificarPossivelCensuraPorTitulos(titulosParaCensura);
+  const possivelCensura = await verificarPossivelCensuraPorTitulos(titulosParaCensura, null);
   return adicionarAvisoCensura(resposta, possivelCensura);
 }
 
@@ -890,7 +980,7 @@ async function responderSerie(titulo, ano, temporada, epInicio, epFim, tipo) {
     }
   }
 
-  const possivelCensura = await verificarPossivelCensuraPorTitulos(titulosParaCensura);
+  const possivelCensura = await verificarPossivelCensuraPorTitulos(titulosParaCensura, temporada);
   return adicionarAvisoCensura(resposta, possivelCensura);
 }
 
@@ -929,7 +1019,7 @@ async function responderFilme(titulo, ano) {
     titulo
   ];
 
-  const possivelCensura = await verificarPossivelCensuraPorTitulos(titulosParaCensura);
+  const possivelCensura = await verificarPossivelCensuraPorTitulos(titulosParaCensura, null);
   return adicionarAvisoCensura(resposta, possivelCensura);
 }
 

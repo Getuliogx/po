@@ -490,6 +490,7 @@ let INDICE_AZNUDE_STATUS = {
   paginas: 0,
   totalPaginas: 0,
   itens: 0,
+  falhas: 0,
   ultimaAtualizacao: 0,
   erro: ""
 };
@@ -742,8 +743,12 @@ async function atualizarIndiceAZNudeGuia() {
   PROMESSA_INDICE_AZNUDE = (async () => {
     INDICE_AZNUDE_STATUS.atualizando = true;
     INDICE_AZNUDE_STATUS.erro = "";
-    let html1 = await fetchTextoCensura("https://www.aznude.com/browse/movies/guide/1.html", 3500);
-    if (!html1) html1 = await fetchTextoJina("https://www.aznude.com/browse/movies/guide/1.html", 6500);
+    INDICE_AZNUDE_STATUS.falhas = 0;
+    const html1 = await fetchPaginaAZNudeComFallback(
+      "https://www.aznude.com/browse/movies/guide/1.html",
+      3000,
+      6500
+    );
     if (!html1) throw new Error("não consegui ler o índice de guias");
 
     const total = Math.min(500, extrairTotalPaginasAZNude(html1, "guide"));
@@ -752,13 +757,21 @@ async function atualizarIndiceAZNudeGuia() {
     INDICE_AZNUDE_STATUS.paginas = 1;
 
     let proxima = 2;
-    const workers = Array.from({ length: Math.min(8, Math.max(0, total - 1)) }, async () => {
+    const workers = Array.from({ length: Math.min(12, Math.max(0, total - 1)) }, async () => {
       while (true) {
         const p = proxima++;
         if (p > total) break;
         const url = `https://www.aznude.com/browse/movies/guide/${p}.html`;
-        const html = await fetchTextoCensura(url, 3000);
-        if (html) registrarCandidatosNoIndiceAZNude(html);
+        // IMPORTANTE: no Render o acesso direto ao AZNude pode falhar. A versão
+        // anterior usava fallback somente na página 1; por isso Elite (página 1)
+        // funcionava e títulos das páginas seguintes desapareciam do índice.
+        // Todas as páginas do guia agora usam exatamente o mesmo fallback.
+        const html = await fetchPaginaAZNudeComFallback(url, 2600, 6500);
+        if (html) {
+          registrarCandidatosNoIndiceAZNude(html);
+        } else {
+          INDICE_AZNUDE_STATUS.falhas = (INDICE_AZNUDE_STATUS.falhas || 0) + 1;
+        }
         INDICE_AZNUDE_STATUS.paginas++;
       }
     });
@@ -778,6 +791,22 @@ async function atualizarIndiceAZNudeGuia() {
   return PROMESSA_INDICE_AZNUDE;
 }
 
+async function aguardarIndiceAZNudeParaTitulos(titulos, limiteMs = 4200) {
+  const fim = Date.now() + limiteMs;
+  // Garante que a varredura esteja em andamento, inclusive em testes ou em
+  // processo recém-iniciado.
+  if (!INDICE_AZNUDE_STATUS.atualizando && !INDICE_AZNUDE_STATUS.pronto) {
+    atualizarIndiceAZNudeGuia();
+  }
+  while (Date.now() < fim) {
+    const pagina = paginaDoIndiceParaTitulos(titulos);
+    if (pagina) return pagina;
+    if (INDICE_AZNUDE_STATUS.pronto && !INDICE_AZNUDE_STATUS.atualizando) break;
+    await new Promise(resolve => setTimeout(resolve, 120));
+  }
+  return paginaDoIndiceParaTitulos(titulos);
+}
+
 async function descobrirPaginaAZNude(titulos) {
   const lista = removerTitulosDuplicados(titulos);
   const chaves = lista.map(normalizarTexto).filter(Boolean);
@@ -790,12 +819,18 @@ async function descobrirPaginaAZNude(titulos) {
 
   let pagina = paginaDoIndiceParaTitulos(lista);
 
-  // Se o índice de todas as séries ainda não chegou nesse título, usa o índice
-  // A-Z do próprio AZNude. Isso funciona para qualquer série presente no site,
-  // sem lista fixa e sem depender do /search/?q=.
+  // Em um deploy novo o índice ainda pode estar sendo construído. Espera um
+  // curto período para o próprio guia encontrar o título. Isso é muito mais
+  // confiável que depender do A-Z quando o acesso direto está bloqueado.
+  if (!pagina) {
+    pagina = await aguardarIndiceAZNudeParaTitulos(lista, 4200);
+  }
+
+  // Último recurso: A-Z do próprio AZNude. Mantemos isso para títulos que não
+  // estejam no guia ou quando alguma página específica do guia tenha falhado.
   if (!pagina) {
     for (const titulo of lista) {
-      pagina = await promessaComLimite(localizarPaginaAZNudePorAZ(titulo), 7000, "");
+      pagina = await promessaComLimite(localizarPaginaAZNudePorAZ(titulo), 4800, "");
       if (pagina) break;
     }
   }
@@ -1460,7 +1495,11 @@ if (process.env.NODE_ENV === "test") {
     extrairTotalPaginasAZNude,
     candidatosAZNudeDoHtml,
     localizarPaginaAZNudePorAZ,
+    atualizarIndiceAZNudeGuia,
+    descobrirPaginaAZNude,
     buscarCensuraPorEpisodioAZNude,
-    responderSerie
+    responderSerie,
+    _indiceAZNude: INDICE_AZNUDE_GUIA,
+    _statusIndiceAZNude: INDICE_AZNUDE_STATUS
   };
 }

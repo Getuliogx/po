@@ -74,3 +74,9 @@ Exemplos do comando completo:
 !calculo serie tell me lies T2
 !calculo serie elite EP1 ao 5 T8
 ```
+
+## Correção do índice completo
+
+Todas as páginas de `/browse/movies/guide/1.html` até a última página detectada usam o mesmo fallback. Isso evita o defeito em que apenas os títulos da página 1 funcionavam quando o Render recebia bloqueio no acesso direto ao AZNude.
+
+`/api/debug-indice-censura` também mostra `falhas`; o ideal é `falhas: 0` depois da varredura.

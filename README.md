@@ -51,15 +51,26 @@ Quando o AZNude tiver guia `By Episode`, séries/animes/desenhos podem retornar,
 Possível censura verificar: ep 2, 3, 4, 5, 7, 8.
 ```
 
-Para testar o guia diretamente no Render:
+A busca não usa uma lista fixa de séries. O servidor monta em segundo plano o índice completo de **Series with Episode Guides** do AZNude e, se o índice ainda não estiver pronto, procura o título no catálogo A-Z do próprio site.
+
+Para testar qualquer série diretamente no Render:
 
 ```text
-https://SEU-SERVICO.onrender.com/api/debug-censura?titulo=elite&temporada=8
+https://SEU-SERVICO.onrender.com/api/debug-censura?titulo=bridgerton&temporada=4
+https://SEU-SERVICO.onrender.com/api/debug-censura?titulo=yellowstone&temporada=5
 ```
 
-Exemplo do comando completo:
+Para conferir se o índice completo já foi carregado:
 
 ```text
-!calculo serie elite T8
+https://SEU-SERVICO.onrender.com/api/debug-indice-censura
+```
+
+Exemplos do comando completo:
+
+```text
+!calculo serie bridgerton T4
+!calculo serie yellowstone T5
+!calculo serie tell me lies T2
 !calculo serie elite EP1 ao 5 T8
 ```

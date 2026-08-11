@@ -464,331 +464,6 @@ async function fetchComTimeout(url, timeoutMs = 6500) {
   }
 }
 
-
-// -----------------------------------------------------------------------------
-// AZNUDE - EPISÓDIOS COM CENSURA
-//
-// Não varre o guia inteiro. O comando localiza a página exata pelo próprio
-// índice/busca do AZNude e lê somente a página da série. Isso mantém o tempo
-// compatível com o limite do StreamElements e funciona para títulos que não
-// estejam em nenhuma lista fixa.
-// -----------------------------------------------------------------------------
-
-const CACHE_AZNUDE_PAGINA = new Map();
-const CACHE_AZNUDE_EPISODIOS = new Map();
-const CACHE_AZNUDE_OK_MS = 12 * 60 * 60 * 1000;
-const CACHE_AZNUDE_ERRO_MS = 2 * 60 * 1000;
-
-function comLimiteTempo(promessa, ms, padrao) {
-  return Promise.race([
-    promessa.catch(() => padrao),
-    new Promise(resolve => setTimeout(() => resolve(padrao), ms))
-  ]);
-}
-
-function compactarTituloAZNude(texto) {
-  return normalizarTexto(texto).replace(/\s+/g, "");
-}
-
-function slugPaginaAZNude(href) {
-  try {
-    const u = new URL(String(href || ""), "https://www.aznude.com/");
-    let nome = decodeURIComponent(u.pathname.split("/").pop() || "");
-    nome = nome
-      .replace(/\.html$/i, "")
-      .replace(/-\d{4,}$/i, "")
-      .replace(/[-_]+/g, " ");
-    return normalizarTexto(nome);
-  } catch (_) {
-    return "";
-  }
-}
-
-function limparTextoCardAZNude(texto) {
-  let t = normalizarTexto(texto);
-  // Cards do browse podem vir como "6.7M Dark Desire 75 304".
-  // Depois de normalizar "6.7M" vira "6 7m"; só removemos quando existe o "m".
-  // Assim títulos como "13 Reasons Why" continuam intactos.
-  t = t.replace(/^\d+(?:\s+\d+)?m\s+/i, "");
-  t = t.replace(/\s+\d+\s+\d+\s*$/i, "");
-  return t.trim();
-}
-
-function candidatosPaginasAZNude(html) {
-  const saida = [];
-  const vistos = new Set();
-  const re = /<a\b[^>]*href=["']([^"']*\/view\/movie\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-  let m;
-
-  while ((m = re.exec(String(html || ""))) !== null) {
-    let url;
-    try {
-      url = new URL(m[1], "https://www.aznude.com/").toString();
-      if (new URL(url).hostname.replace(/^www\./i, "").toLowerCase() !== "aznude.com") {
-        continue;
-      }
-    } catch (_) {
-      continue;
-    }
-
-    if (vistos.has(url)) continue;
-    vistos.add(url);
-
-    saida.push({
-      url,
-      slug: slugPaginaAZNude(url),
-      texto: limparTextoCardAZNude(removerTagsHtml(m[2] || ""))
-    });
-  }
-
-  return saida;
-}
-
-function candidatoAZNudeEhTitulo(candidato, titulo) {
-  const alvoCompacto = compactarTituloAZNude(titulo);
-  if (!alvoCompacto) return false;
-
-  if (compactarTituloAZNude(candidato.slug) === alvoCompacto) {
-    return true;
-  }
-
-  return compactarTituloAZNude(candidato.texto) === alvoCompacto;
-}
-
-function acharPaginaAZNudeNoHtml(html, titulos) {
-  const candidatos = candidatosPaginasAZNude(html);
-  for (const titulo of removerTitulosDuplicados(titulos)) {
-    const encontrado = candidatos.find(c => candidatoAZNudeEhTitulo(c, titulo));
-    if (encontrado) return encontrado.url;
-  }
-  return "";
-}
-
-async function localizarAZNudePelaBusca(titulos) {
-  const lista = removerTitulosDuplicados(titulos).slice(0, 3);
-  const tarefas = [];
-
-  for (const titulo of lista) {
-    const q = encodeURIComponent(titulo);
-    // O projeto antigo já usa /search/?q= para a censura genérica.
-    for (const url of [
-      `https://www.aznude.com/search/?q=${q}`,
-      `https://www.aznude.com/search?q=${q}`
-    ]) {
-      tarefas.push((async () => {
-        const html = await fetchComTimeout(url, 3200);
-        const pagina = acharPaginaAZNudeNoHtml(html, lista);
-        if (!pagina) throw new Error("resultado não encontrado");
-        return pagina;
-      })());
-    }
-  }
-
-  if (!tarefas.length) return "";
-
-  try {
-    return await comLimiteTempo(Promise.any(tarefas), 3400, "");
-  } catch (_) {
-    return "";
-  }
-}
-
-function secaoAZNudeParaTitulo(titulo) {
-  const n = normalizarTexto(titulo);
-  if (!n) return "";
-  const primeiro = n.charAt(0);
-  if (/[0-9]/.test(primeiro)) return "0-9";
-  if (/[a-z]/.test(primeiro)) return primeiro;
-  const letra = n.match(/[a-z]/);
-  return letra ? letra[0] : "0-9";
-}
-
-function totalPaginasSecaoAZNude(html, secao) {
-  const valores = [1];
-  const esc = String(secao).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`/browse/movies/${esc}/(\\d+)\\.html`, "gi");
-  let m;
-  while ((m = re.exec(String(html || ""))) !== null) {
-    valores.push(Number(m[1]));
-  }
-  return Math.max(...valores.filter(Number.isFinite));
-}
-
-function faixaCompactaAZNude(html) {
-  const lista = candidatosPaginasAZNude(html)
-    .map(c => compactarTituloAZNude(c.texto || c.slug))
-    .filter(Boolean)
-    .sort((a, b) => a.localeCompare(b, "en"));
-  return lista.length ? { min: lista[0], max: lista[lista.length - 1] } : { min: "", max: "" };
-}
-
-async function localizarAZNudeNoAZ(titulo) {
-  const alvo = compactarTituloAZNude(titulo);
-  const secao = secaoAZNudeParaTitulo(titulo);
-  if (!alvo || !secao) return "";
-
-  const urlPagina = p => `https://www.aznude.com/browse/movies/${secao}/${p}.html`;
-  const primeira = await fetchComTimeout(urlPagina(1), 1900);
-  if (!primeira) return "";
-
-  let pagina = acharPaginaAZNudeNoHtml(primeira, [titulo]);
-  if (pagina) return pagina;
-
-  const total = Math.min(1000, totalPaginasSecaoAZNude(primeira, secao));
-  if (total <= 1) return "";
-
-  let baixo = 2;
-  let alto = total;
-  const visitadas = new Map([[1, primeira]]);
-
-  // Busca binária: o catálogo A-Z é alfabetizado, então não há motivo para
-  // percorrer centenas de páginas.
-  for (let passo = 0; passo < 8 && baixo <= alto; passo++) {
-    const meio = Math.floor((baixo + alto) / 2);
-    const html = await fetchComTimeout(urlPagina(meio), 1500);
-    if (!html) break;
-    visitadas.set(meio, html);
-
-    pagina = acharPaginaAZNudeNoHtml(html, [titulo]);
-    if (pagina) return pagina;
-
-    const faixa = faixaCompactaAZNude(html);
-    if (!faixa.min || !faixa.max) break;
-
-    if (alvo < faixa.min) {
-      alto = meio - 1;
-    } else if (alvo > faixa.max) {
-      baixo = meio + 1;
-    } else {
-      // Se cair dentro da faixa mas não houver igualdade, testa vizinhos.
-      baixo = Math.max(2, meio - 2);
-      alto = Math.min(total, meio + 2);
-      break;
-    }
-  }
-
-  // Pequena margem para diferenças de pontuação/artigos na ordenação.
-  const centro = Math.max(1, Math.min(total, Math.floor((baixo + alto) / 2) || baixo || alto || 1));
-  const extras = [];
-  for (let p = Math.max(1, centro - 2); p <= Math.min(total, centro + 2); p++) {
-    if (!visitadas.has(p)) extras.push(p);
-  }
-
-  const paginasExtras = await Promise.all(
-    extras.map(async p => [p, await fetchComTimeout(urlPagina(p), 1500)])
-  );
-  for (const [, html] of paginasExtras) {
-    if (!html) continue;
-    pagina = acharPaginaAZNudeNoHtml(html, [titulo]);
-    if (pagina) return pagina;
-  }
-
-  return "";
-}
-
-async function descobrirPaginaSerieAZNude(titulos) {
-  const lista = removerTitulosDuplicados(titulos);
-  const agora = Date.now();
-
-  for (const titulo of lista) {
-    const chave = normalizarTexto(titulo);
-    const cache = CACHE_AZNUDE_PAGINA.get(chave);
-    if (cache && cache.expira > agora) {
-      return cache.url;
-    }
-  }
-
-  // Busca normal e A-Z começam juntas. Não existe lista fixa e não existe
-  // varredura das 136 páginas do guia.
-  const tarefas = [
-    localizarAZNudePelaBusca(lista).then(url => {
-      if (!url) throw new Error("busca vazia");
-      return url;
-    })
-  ];
-
-  // O nome original do TMDB é o melhor candidato para o catálogo A-Z.
-  for (const titulo of lista.slice(0, 2)) {
-    tarefas.push(localizarAZNudeNoAZ(titulo).then(url => {
-      if (!url) throw new Error("A-Z vazio");
-      return url;
-    }));
-  }
-
-  let pagina = "";
-  try {
-    pagina = await comLimiteTempo(Promise.any(tarefas), 7200, "");
-  } catch (_) {
-    pagina = "";
-  }
-
-  const expira = Date.now() + (pagina ? CACHE_AZNUDE_OK_MS : CACHE_AZNUDE_ERRO_MS);
-  for (const titulo of lista) {
-    CACHE_AZNUDE_PAGINA.set(normalizarTexto(titulo), { url: pagina, expira });
-  }
-  return pagina;
-}
-
-function extrairMapaEpisodiosAZNude(html) {
-  const mapa = new Map();
-  const texto = removerTagsHtml(String(html || ""))
-    .replace(/\s+/g, " ");
-
-  const re = /\bSeason\s*0*(\d{1,3})\s*Episode\s*0*(\d{1,4})\b/gi;
-  let m;
-  while ((m = re.exec(texto)) !== null) {
-    const temporada = Number(m[1]);
-    const episodio = Number(m[2]);
-    if (!Number.isInteger(temporada) || !Number.isInteger(episodio)) continue;
-    if (!mapa.has(temporada)) mapa.set(temporada, new Set());
-    mapa.get(temporada).add(episodio);
-  }
-  return mapa;
-}
-
-async function episodiosCensuraAZNude(titulos, temporada, epInicio, epFim) {
-  if (!CHECK_CENSURA) return [];
-
-  const pagina = await descobrirPaginaSerieAZNude(titulos);
-  if (!pagina) return [];
-
-  const agora = Date.now();
-  let mapa;
-  const cache = CACHE_AZNUDE_EPISODIOS.get(pagina);
-
-  if (cache && cache.expira > agora) {
-    mapa = cache.mapa;
-  } else {
-    const html = await fetchComTimeout(pagina, 4200);
-    mapa = extrairMapaEpisodiosAZNude(html);
-    const temDados = [...mapa.values()].some(set => set && set.size);
-    CACHE_AZNUDE_EPISODIOS.set(pagina, {
-      mapa,
-      expira: Date.now() + (temDados ? CACHE_AZNUDE_OK_MS : CACHE_AZNUDE_ERRO_MS)
-    });
-  }
-
-  const set = mapa.get(Number(temporada));
-  if (!set) return [];
-
-  let lista = [...set].sort((a, b) => a - b);
-  if (epInicio !== null && epInicio !== undefined) {
-    const a = Number(epInicio);
-    const b = epFim === null || epFim === undefined ? a : Number(epFim);
-    const min = Math.min(a, b);
-    const max = Math.max(a, b);
-    lista = lista.filter(ep => ep >= min && ep <= max);
-  }
-  return lista;
-}
-
-function adicionarAvisoCensuraPorEpisodio(resposta, episodios) {
-  const lista = [...new Set((episodios || []).map(Number).filter(Number.isFinite))]
-    .sort((a, b) => a - b);
-  if (!lista.length) return resposta;
-  return resposta + ` Possível censura verificar: ep ${lista.join(", ")}.`;
-}
-
 function removerTitulosDuplicados(titulos) {
   const vistos = new Set();
   const lista = [];
@@ -960,9 +635,10 @@ async function buscarSeriePorTitulo(titulo, ano) {
       (ano ? `&first_air_date_year=${encodeURIComponent(ano)}` : "")
   ];
 
-  const buscas = await Promise.all(urls.map(url => tmdbGet(url)));
   const resultados = [];
-  for (const busca of buscas) {
+
+  for (const url of urls) {
+    const busca = await tmdbGet(url);
     resultados.push(...(busca.results || []));
   }
 
@@ -1133,19 +809,6 @@ async function responderSerie(titulo, ano, temporada, epInicio, epFim, tipo) {
     return `Não achei a série/anime/desenho "${titulo}"${ano ? ` de ${ano}` : ""} no TMDB.`;
   }
 
-  const nomesSerieParaAZNude = removerTitulosDuplicados([
-    serie.original_name,
-    serie.name,
-    titulo
-  ]);
-
-  // Começa junto com a consulta da temporada para não somar tempo no comando.
-  const promessaEpisodiosCensura = comLimiteTempo(
-    episodiosCensuraAZNude(nomesSerieParaAZNude, temporada, epInicio, epFim),
-    10500,
-    []
-  );
-
   const temporadaUrl =
     `https://api.themoviedb.org/3/tv/${serie.id}/season/${temporada}` +
     `?api_key=${encodeURIComponent(TMDB_KEY)}` +
@@ -1196,7 +859,11 @@ async function responderSerie(titulo, ano, temporada, epInicio, epFim, tipo) {
     resposta += ` Obs: ${episodiosSemDuracao} episódio(s) sem minutagem no TMDB.`;
   }
 
-  const nomesSerie = nomesSerieParaAZNude;
+  const nomesSerie = removerTitulosDuplicados([
+    serie.original_name,
+    serie.name,
+    titulo
+  ]);
 
   const nomesEpisodios = episodios
     .map(ep => ep.name)
@@ -1223,21 +890,7 @@ async function responderSerie(titulo, ano, temporada, epInicio, epFim, tipo) {
     }
   }
 
-  const promessaCensuraGenerica = comLimiteTempo(
-    verificarPossivelCensuraPorTitulos(titulosParaCensura),
-    5200,
-    false
-  );
-
-  const [episodiosComCensura, possivelCensura] = await Promise.all([
-    promessaEpisodiosCensura,
-    promessaCensuraGenerica
-  ]);
-
-  if (episodiosComCensura && episodiosComCensura.length) {
-    return adicionarAvisoCensuraPorEpisodio(resposta, episodiosComCensura);
-  }
-
+  const possivelCensura = await verificarPossivelCensuraPorTitulos(titulosParaCensura);
   return adicionarAvisoCensura(resposta, possivelCensura);
 }
 
@@ -1279,40 +932,6 @@ async function responderFilme(titulo, ano) {
   const possivelCensura = await verificarPossivelCensuraPorTitulos(titulosParaCensura);
   return adicionarAvisoCensura(resposta, possivelCensura);
 }
-
-
-app.get("/api/debug-censura", async (req, res) => {
-  const inicio = Date.now();
-  try {
-    const titulo = limparTitulo(req.query.titulo);
-    const temporada = Number(req.query.temporada || 1);
-    if (!titulo) {
-      return res.json({ ok: false, erro: "titulo não informado" });
-    }
-
-    const pagina = await descobrirPaginaSerieAZNude([titulo]);
-    const html = pagina ? await fetchComTimeout(pagina, 4200) : "";
-    const mapa = extrairMapaEpisodiosAZNude(html);
-    const episodios = mapa.has(temporada)
-      ? [...mapa.get(temporada)].sort((a, b) => a - b)
-      : [];
-
-    return res.json({
-      ok: episodios.length > 0,
-      titulo,
-      temporada,
-      pagina,
-      episodios,
-      ms: Date.now() - inicio
-    });
-  } catch (err) {
-    return res.json({
-      ok: false,
-      erro: String(err && err.message || err),
-      ms: Date.now() - inicio
-    });
-  }
-});
 
 app.get("/api/calculo", async (req, res) => {
   try {

@@ -1,16 +1,44 @@
-# po - censura por episódio
+# po
 
-Versão refeita sobre o `po-main(3).zip`.
+API TMDB cálculo online para StreamElements.
 
-- Não possui lista fixa de séries.
-- Não percorre as 136 páginas do guia.
-- Localiza a série pela busca do AZNude e, em paralelo, pelo catálogo A-Z.
-- Lê `Season X Episode Y` diretamente na página da série.
-- Mantém o aviso genérico antigo como fallback.
-- Mantém intervalos como `EP1 ao 5 T8`.
+## Exemplos do comando
 
-Teste de diagnóstico depois do deploy:
+Filme:
 
-`/api/debug-censura?titulo=bridgerton&temporada=4`
+```text
+!calculo filme gente grande
+!calculo filme gente grande 2
+!calculo filme premonição 2
+!calculo filme a mumia 1999
+```
 
-O JSON deve trazer a URL encontrada e a lista de episódios.
+Série, anime ou desenho:
+
+```text
+!calculo serie glee 1
+!calculo serie perdidos no espaço 2018 T1
+!calculo anime dragon ball z 1989 T1
+!calculo desenho ben 10 2005 T1
+```
+
+Coletânea de filmes:
+
+```text
+!calculo coletanea rambo
+!calculo coletanea rambo 2 ao 5
+!calculo coletanea velozes e furiosos 1 ao 3
+```
+
+## Formatos aceitos para temporada
+
+```text
+1
+T1
+t1
+S1
+temporada 1
+temp 1
+```
+
+Observação: número simples no final só vira temporada quando você usa `serie`, `anime` ou `desenho`. Assim filmes como `Premonição 2`, `Gente Grande 2` e `Distrito 9` não são confundidos com temporada.

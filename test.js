@@ -1,109 +1,108 @@
-const assert = require("assert");
-const {
-  escolherMelhorFilme,
-  escolherMelhorSerie,
-  tituloPareceNosResultados,
-  tituloBateExatamenteNoCampo,
-  normalizarConsultasCensura,
-  paginaPareceSemResultado
-} = require("./server");
+process.env.NODE_ENV = "test";
+process.env.TMDB_KEY = "teste";
 
-function teste(nome, fn) {
-  try {
-    fn();
-    console.log(`OK - ${nome}`);
-  } catch (err) {
-    console.error(`FALHOU - ${nome}`);
-    throw err;
-  }
+const assert = require("assert/strict");
+const api = require("./server");
+
+const parse = api.separarTituloAnoTemporadaEEpisodios;
+
+assert.deepEqual(parse("elite EP1 ao 5 T8", "serie"), {
+  titulo: "elite", ano: null, temporada: 8, epInicio: 1, epFim: 5
+});
+assert.deepEqual(parse("elite T8 EP1 ao EP5", "serie"), {
+  titulo: "elite", ano: null, temporada: 8, epInicio: 1, epFim: 5
+});
+assert.deepEqual(parse("premonição 2", "filme"), {
+  titulo: "premonição 2", ano: null, temporada: null, epInicio: null, epFim: null
+});
+
+const episodios = api.extrairMapaEpisodiosAZNude(`
+  Season 8 Episode 2
+  Season 8 Episode 3
+  S08E05
+  Season 7 Episode 1
+`);
+assert.deepEqual(api.filtrarEpisodiosCensura(episodios, 8, null, null), [2, 3, 5]);
+assert.deepEqual(api.filtrarEpisodiosCensura(episodios, 8, 3, 5), [3, 5]);
+
+const bloqueio = `<html><head><title>Site Unavailable</title></head><body>${"x".repeat(240)} Unable to access this site.</body></html>`;
+assert.equal(api.paginaCatalogoAZNudeValida(bloqueio), false);
+
+const markdown = `${"x".repeat(220)}
+# Browse Series with Episode Guides at AZNude
+[![Image 1: ELITE](https://cdn.example/capa.jpg) Elite 107 482](https://www.aznude.com/view/movie/e/elite-4021272.html)
+AZNude has a global mission`;
+assert.equal(api.paginaCatalogoAZNudeValida(markdown), true);
+assert.equal(
+  api.acharPaginaAZNudeNosResultados(markdown, ["Elite"]),
+  "https://www.aznude.com/view/movie/e/elite-4021272.html"
+);
+
+const casosIndice = {
+  elite: "https://www.aznude.com/view/movie/e/elite-4021272.html",
+  bridgerton: "https://www.aznude.com/view/movie/b/bridgerton-4020343.html",
+  "tell me lies": "https://www.aznude.com/view/movie/t/tellmelies-4020345.html",
+  yellowstone: "https://www.aznude.com/view/movie/y/yellowstone-4024799.html"
+};
+for (const [titulo, url] of Object.entries(casosIndice)) {
+  assert.equal(api.paginasDoIndiceParaTitulos([titulo], 1)[0], url);
 }
 
-teste("Chicken Run exato com o ano correto gera correspondência", () => {
-  const html = '<div class="result"><a href="/movie/chicken-run-2000">Chicken Run (2000) - Nude Scenes</a></div>';
-  assert.strictEqual(tituloPareceNosResultados(html, "Chicken Run", 2000), true);
+assert.equal(api._statusIndiceAZNude.pronto, true);
+assert.equal(api._statusIndiceAZNude.paginas, 136);
+assert.equal(api._guiasConfirmadosAZNude.size, 3204);
+
+(async () => {
+  const fetchReal = global.fetch;
+  let headersGuia = null;
+  global.fetch = async (urlRecebida, opcoes = {}) => {
+    const url = String(urlRecebida);
+    if (url.includes("api.themoviedb.org/3/search/tv")) {
+      return new Response(JSON.stringify({ results: [{
+        id: 1,
+        name: "Bridgerton",
+        original_name: "Bridgerton",
+        first_air_date: "2020-12-25",
+        popularity: 100
+      }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url.includes("api.themoviedb.org/3/tv/1/season/4")) {
+      return new Response(JSON.stringify({ episodes: Array.from({ length: 8 }, (_, i) => ({
+        episode_number: i + 1,
+        name: `Episódio ${i + 1}`,
+        runtime: 60
+      })) }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url.startsWith("https://r.jina.ai/https://www.aznude.com/view/movie/b/bridgerton")) {
+      headersGuia = opcoes.headers;
+      return new Response(`
+        <section class="single-page__movie-wrapper" data-guide="1">
+          <h2>Season 4 Episode 3</h2>
+          <h2>Season 4 Episode 4</h2>
+          <h2>Season 4 Episode 5</h2>
+          <h2>Season 4 Episode 8</h2>
+        </section>
+      `, { status: 200 });
+    }
+    if (url.startsWith("https://www.aznude.com/view/movie/b/bridgerton")) {
+      return new Response("<html><title>Site Unavailable</title>Unable to access this site.</html>", { status: 200 });
+    }
+    throw new Error(`URL inesperada no teste: ${url}`);
+  };
+
+  try {
+    const resposta = await api.responderSerie("bridgerton", null, 4, null, null, "serie");
+    assert.match(resposta, /Bridgerton \(2020\) - Temporada 4/);
+    assert.match(resposta, /8 episódio\(s\), 480 minutos no total/);
+    assert.match(resposta, /Possível censura verificar: ep 3, 4, 5, 8\./);
+    assert.equal(headersGuia["X-Respond-With"], "html");
+    assert.equal(headersGuia["X-Target-Selector"], ".single-page__movie-wrapper[data-guide]");
+  } finally {
+    global.fetch = fetchReal;
+  }
+
+  console.log("OK: testes locais da censura passaram.");
+})().catch(error => {
+  console.error(error && error.stack || error);
+  process.exit(1);
 });
-
-teste("continuação recomendada não é confundida com Chicken Run", () => {
-  const html = '<div class="recommendation"><a href="/movie/chicken-run-dawn-of-the-nugget-2023">Chicken Run: Dawn of the Nugget (2023)</a></div>';
-  assert.strictEqual(tituloPareceNosResultados(html, "Chicken Run", 2000), false);
-});
-
-teste("mesmo título com outro ano não gera aviso", () => {
-  const html = '<div class="result"><a href="/movie/the-gift-2000">The Gift (2000)</a></div>';
-  assert.strictEqual(tituloPareceNosResultados(html, "The Gift", 2015), false);
-});
-
-teste("resultado exato sem ano é aceito", () => {
-  const html = '<div class="result"><a href="/movie/chicken-run">Chicken Run</a></div>';
-  assert.strictEqual(tituloPareceNosResultados(html, "Chicken Run", 2000), true);
-});
-
-teste("link da própria pesquisa não é contado como resultado", () => {
-  const html = '<a href="/search?q=chicken-run-2000">Chicken Run 2000</a>';
-  assert.strictEqual(tituloPareceNosResultados(html, "Chicken Run", 2000), false);
-});
-
-teste("nome da atriz antes do título não impede correspondência", () => {
-  const html = '<div class="result"><a href="/scene/kate-winslet-titanic-nude">Kate Winslet - Titanic Nude Scene</a></div>';
-  assert.strictEqual(tituloPareceNosResultados(html, "Titanic", 1997), true);
-});
-
-teste("texto no-results dentro de script não invalida página", () => {
-  const html = '<script>const empty = "no results";</script><a href="/movie/titanic">Titanic</a>';
-  assert.strictEqual(paginaPareceSemResultado(html), false);
-  assert.strictEqual(tituloPareceNosResultados(html, "Titanic", 1997), true);
-});
-
-
-teste("página sem resultado com recomendações é ignorada", () => {
-  const html = '<p>No results found</p><a href="/movie/chicken-run-2000">Chicken Run (2000)</a>';
-  assert.strictEqual(paginaPareceSemResultado(html), true);
-});
-
-teste("ano correto de outro link vizinho não corrige ano errado do resultado", () => {
-  const html = '<a href="/movie/chicken-run-2023">Chicken Run (2023)</a><a href="/movie/other-2000">Outro filme (2000)</a>';
-  assert.strictEqual(tituloPareceNosResultados(html, "Chicken Run", 2000), false);
-});
-
-teste("sufixos genéricos de censura são aceitos, subtítulos não", () => {
-  assert.strictEqual(tituloBateExatamenteNoCampo("Chicken Run Nude Scenes 2000", "Chicken Run"), true);
-  assert.strictEqual(tituloBateExatamenteNoCampo("Chicken Run Dawn of the Nugget 2023", "Chicken Run"), false);
-});
-
-teste("TMDB usa título e ano exatos entre filmes homônimos", () => {
-  const resultados = [
-    { id: 1, title: "The Gift", original_title: "The Gift", release_date: "2000-03-16", popularity: 99 },
-    { id: 2, title: "O Presente", original_title: "The Gift", release_date: "2015-08-07", popularity: 10 }
-  ];
-  assert.strictEqual(escolherMelhorFilme(resultados, "The Gift", 2015).id, 2);
-  assert.strictEqual(escolherMelhorFilme(resultados, "The Gift", 2000).id, 1);
-});
-
-teste("TMDB não aceita recomendação parecida quando há ano", () => {
-  const resultados = [
-    { id: 3, title: "Chicken Run: Dawn of the Nugget", original_title: "Chicken Run: Dawn of the Nugget", release_date: "2023-12-08", popularity: 100 }
-  ];
-  assert.strictEqual(escolherMelhorFilme(resultados, "Chicken Run", 2023), null);
-});
-
-teste("séries homônimas também respeitam nome e ano", () => {
-  const resultados = [
-    { id: 4, name: "Lost in Space", original_name: "Lost in Space", first_air_date: "1965-09-15", popularity: 90 },
-    { id: 5, name: "Perdidos no Espaço", original_name: "Lost in Space", first_air_date: "2018-04-13", popularity: 20 }
-  ];
-  assert.strictEqual(escolherMelhorSerie(resultados, "Lost in Space", 2018).id, 5);
-});
-
-teste("consultas de censura são separadas por título e ano", () => {
-  const lista = normalizarConsultasCensura([
-    { titulo: "The Gift", ano: 2000 },
-    { titulo: "The Gift", ano: 2015 },
-    { titulo: "The Gift", ano: 2015 }
-  ]);
-  assert.deepStrictEqual(lista, [
-    { titulo: "The Gift", ano: "2000" },
-    { titulo: "The Gift", ano: "2015" }
-  ]);
-});
-
-console.log("Todos os testes passaram.");

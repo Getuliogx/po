@@ -43,36 +43,23 @@ temp 1
 
 Observação: número simples no final só vira temporada quando você usa `serie`, `anime` ou `desenho`. Assim filmes como `Premonição 2`, `Gente Grande 2` e `Distrito 9` não são confundidos com temporada.
 
-## Aviso de censura por episódio (AZNude)
+## Censura por episódio (AZNude)
 
-Quando o AZNude tiver o guia **By Episode** para a série e temporada, a resposta informa os episódios encontrados.
+Quando o AZNude tiver guia `By Episode`, séries/animes/desenhos podem retornar, por exemplo:
 
-Exemplos:
+```text
+Possível censura verificar: ep 2, 3, 4, 5, 7, 8.
+```
+
+Para testar o guia diretamente no Render:
+
+```text
+https://SEU-SERVICO.onrender.com/api/debug-censura?titulo=elite&temporada=8
+```
+
+Exemplo do comando completo:
 
 ```text
 !calculo serie elite T8
-# ... Possível censura verificar: ep 2, 3, 4, 5, 7, 8.
-
 !calculo serie elite EP1 ao 5 T8
-# ... Possível censura verificar: ep 2, 3, 4, 5.
 ```
-
-Se o guia por episódio não estiver disponível, continua usando o aviso genérico antigo das fontes de censura.
-
-`DEBUG_CENSURA=true` é opcional e só serve para mostrar no log qual caminho de consulta foi usado.
-
-## Diagnóstico da censura por episódio
-
-Depois do deploy, para testar diretamente no próprio Render sem depender do StreamElements, abra:
-
-```text
-https://SEU-RENDER.onrender.com/api/debug-censura?titulo=elite&temporada=8
-```
-
-Quando o acesso estiver funcionando, deve retornar `episodios` com:
-
-```text
-[2,3,4,5,7,8]
-```
-
-Esse diagnóstico não muda o comando. Ele existe para mostrar claramente se o Render conseguiu localizar a página da série e ler o guia `By Episode`.

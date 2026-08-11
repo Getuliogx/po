@@ -273,6 +273,7 @@ async function tmdbGet(url) {
 
 function montarUrlsCensura(titulo) {
   const q = encodeURIComponent(titulo);
+  const qAznude = encodeURIComponent(`site:aznude.com/view/movie ${titulo}`);
 
   return [
     {
@@ -280,8 +281,9 @@ function montarUrlsCensura(titulo) {
       url: `https://www.celebritymoviearchive.com/tour/search-full.php?searchstring=${q}`
     },
     {
+      // AZNude search é 100% JS. Usamos DuckDuckGo HTML (server-side) para achar a página real.
       nome: "aznude",
-      url: `https://www.aznude.com/search/?q=${q}`
+      url: `https://html.duckduckgo.com/html/?q=${qAznude}`
     },
     {
       nome: "mrskin",
@@ -483,30 +485,61 @@ function removerTitulosDuplicados(titulos) {
   return lista;
 }
 
-function extrairLinksAznudeSerie(html, titulo) {
-  const links = extrairLinks(html).filter(linkPareceResultadoReal);
+function extrairLinksAznudeDeDuckDuckGo(html, titulo) {
   const candidatos = [];
+  const tituloNormal = normalizarTexto(titulo);
+  const slugTitulo = criarSlug(titulo);
 
+  // DuckDuckGo coloca o link real em uddg=...
+  const uddgRegex = /uddg=([^&"']+)/gi;
+  let match;
+  while ((match = uddgRegex.exec(html)) !== null) {
+    try {
+      const decoded = decodeURIComponent(match[1]);
+      if (decoded.includes("aznude.com/view/movie/")) {
+        candidatos.push(decoded);
+      }
+    } catch (e) {
+      // ignore decode errors
+    }
+  }
+
+  // Também pega href diretos
+  const links = extrairLinks(html);
   for (const link of links) {
     const href = String(link.href || "");
-    const texto = String(link.texto || "");
-
-    if (!href.includes("/view/movie/") && !href.includes("/viewmovie/")) {
-      continue;
-    }
-
-    if (tituloBateNoTexto(texto, titulo) || tituloBateNoTexto(href, titulo)) {
+    if (href.includes("aznude.com/view/movie/") || href.includes("/view/movie/")) {
       let urlCompleta = href;
       if (href.startsWith("/")) {
         urlCompleta = "https://www.aznude.com" + href;
       } else if (!href.startsWith("http")) {
-        urlCompleta = "https://www.aznude.com/" + href;
+        continue;
       }
-      candidatos.push(urlCompleta);
+      // limpa parâmetros do DDG
+      urlCompleta = urlCompleta.split("&")[0].split("?")[0];
+      if (urlCompleta.includes("aznude.com/view/movie/")) {
+        candidatos.push(urlCompleta);
+      }
     }
   }
 
-  return [...new Set(candidatos)];
+  // Prefere o que bate melhor com o título
+  const unicos = [...new Set(candidatos)];
+  const pontuados = unicos.map(url => {
+    const slug = normalizarTexto(url);
+    let pontos = 0;
+    if (slug.includes(slugTitulo)) pontos += 100;
+    if (slug.includes(tituloNormal.replace(/\s+/g, ""))) pontos += 50;
+    // evita "elitetarget", "elite-office" etc quando o título é só "Elite"
+    const pathPart = (url.split("/view/movie/")[1] || "").toLowerCase();
+    if (pathPart.startsWith(slugTitulo + "-") || pathPart.startsWith(slugTitulo + ".")) {
+      pontos += 80;
+    }
+    return { url, pontos };
+  });
+
+  pontuados.sort((a, b) => b.pontos - a.pontos);
+  return pontuados.map(p => p.url);
 }
 
 function extrairEpisodiosAznude(html, temporadaAlvo = null) {
@@ -551,35 +584,35 @@ async function verificarPossivelCensuraPorTitulos(titulos, temporada = null) {
     const buscas = montarUrlsCensura(titulo);
 
     for (const busca of buscas) {
-      const html = await fetchComTimeout(busca.url);
+      const html = await fetchComTimeout(busca.url, 8000);
 
       if (!html) {
         continue;
       }
 
-      if (paginaPareceSemResultado(html)) {
-        continue;
-      }
-
-      if (!tituloPareceNosResultados(html, titulo)) {
-        continue;
-      }
-
-      encontrou = true;
-
-      // Só tenta extrair episódios no AZNude (tem a aba "By Episode")
+      // Para AZNude usamos DuckDuckGo → sempre tenta extrair links da página
       if (busca.nome === "aznude") {
-        const paginasSerie = extrairLinksAznudeSerie(html, titulo);
+        let paginasSerie = extrairLinksAznudeDeDuckDuckGo(html, titulo);
 
-        // Se a própria página de busca já listar episódios, usa
-        let eps = extrairEpisodiosAznude(html, temporada);
-        if (eps.length > 0) {
-          episodiosEncontrados = [...new Set([...episodiosEncontrados, ...eps])].sort((a, b) => a - b);
+        // Retry com aspas se a primeira busca não trouxe nada
+        if (paginasSerie.length === 0) {
+          const urlAspas = `https://html.duckduckgo.com/html/?q=${encodeURIComponent('site:aznude.com/view/movie "' + titulo + '"')}`;
+          const html2 = await fetchComTimeout(urlAspas, 8000);
+          if (html2) {
+            paginasSerie = extrairLinksAznudeDeDuckDuckGo(html2, titulo);
+          }
         }
 
-        // Segue o link da série/filme e extrai os episódios de lá
-        for (const paginaUrl of paginasSerie.slice(0, 3)) {
-          const htmlPagina = await fetchComTimeout(paginaUrl, 8000);
+        if (paginasSerie.length === 0) {
+          continue;
+        }
+
+        // Achou página no AZNude → marca como possível censura
+        encontrou = true;
+
+        // Pega no máximo as 2 melhores páginas e extrai episódios
+        for (const paginaUrl of paginasSerie.slice(0, 2)) {
+          const htmlPagina = await fetchComTimeout(paginaUrl, 9000);
           if (!htmlPagina) continue;
 
           const epsPagina = extrairEpisodiosAznude(htmlPagina, temporada);
@@ -587,6 +620,16 @@ async function verificarPossivelCensuraPorTitulos(titulos, temporada = null) {
             episodiosEncontrados = [...new Set([...episodiosEncontrados, ...epsPagina])].sort((a, b) => a - b);
           }
         }
+        continue;
+      }
+
+      // Demais sites (CMA, MrSkin)
+      if (paginaPareceSemResultado(html)) {
+        continue;
+      }
+
+      if (tituloPareceNosResultados(html, titulo)) {
+        encontrou = true;
       }
     }
   }

@@ -1610,7 +1610,7 @@ async function responderYoutube(urlVideo) {
   const minutos = Math.ceil(segundos / 60);
   const valor = minutos * PRECO_FILME_POR_MINUTO;
   const titulo = limparTitulo(video.snippet && video.snippet.title) || "Vídeo do YouTube";
-  return `▶️ YouTube: ${titulo} tem ${minutos} minutos. Valor: ${formatarReal(valor)};
+  return `▶️ YouTube: ${titulo} tem ${minutos} minutos. Valor: ${formatarReal(valor)}.`;
 }
 
 async function responderFilme(titulo, ano) {

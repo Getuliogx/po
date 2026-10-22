@@ -5,6 +5,7 @@ const path = require("path");
 const app = express();
 
 const TMDB_KEY = process.env.TMDB_KEY;
+const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
 
 // No Render:
 // CANAIS_PERMITIDOS=seucanal,outrocanal,maisumcanal
@@ -1564,6 +1565,54 @@ async function responderSerie(titulo, ano, temporada, epInicio, epFim, tipo) {
   return adicionarAvisoCensura(resposta, possivelCensura);
 }
 
+function extrairIdYoutube(entrada) {
+  const texto = String(entrada || "").trim();
+  if (!/^https?:\/\//i.test(texto)) return null;
+  try {
+    const url = new URL(texto);
+    const host = url.hostname.toLowerCase().replace(/^www\./, "").replace(/^m\./, "");
+    let id = null;
+    if (host === "youtu.be") id = url.pathname.split("/").filter(Boolean)[0];
+    else if (["youtube.com", "youtube-nocookie.com"].includes(host)) {
+      if (url.pathname === "/watch") id = url.searchParams.get("v");
+      else {
+        const partes = url.pathname.split("/").filter(Boolean);
+        if (["shorts", "embed", "live", "v"].includes(partes[0])) id = partes[1];
+      }
+    }
+    return id && /^[a-zA-Z0-9_-]{11}$/.test(id) ? id : null;
+  } catch (_) { return null; }
+}
+
+async function responderYoutube(urlVideo) {
+  if (!YOUTUBE_API_KEY) return "Erro: YOUTUBE_API_KEY não configurada no Render.";
+  const id = extrairIdYoutube(urlVideo);
+  if (!id) return "Link do YouTube inválido. Envie um link de vídeo, Shorts ou live gravada.";
+
+  const apiUrl = "https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=" +
+    encodeURIComponent(id) + "&key=" + encodeURIComponent(YOUTUBE_API_KEY);
+  const resp = await fetch(apiUrl);
+  if (!resp.ok) {
+    console.error("YouTube API HTTP", resp.status, await resp.text().catch(() => ""));
+    return "Erro ao consultar o YouTube. Confira a chave e se a YouTube Data API v3 está ativada.";
+  }
+  const dados = await resp.json();
+  const video = dados.items && dados.items[0];
+  if (!video) return "Não achei esse vídeo no YouTube ou ele não está disponível publicamente.";
+
+  // ISO 8601 duration, por exemplo PT1H2M10S
+  const duracao = video.contentDetails && video.contentDetails.duration || "";
+  const match = duracao.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/);
+  if (!match) return "Não consegui obter a duração desse vídeo. Lives em andamento podem não ter duração disponível.";
+  const segundos = Number(match[1] || 0) * 3600 + Number(match[2] || 0) * 60 + Number(match[3] || 0);
+  if (segundos <= 0) return "Esse vídeo não tem uma duração válida disponível para cálculo.";
+
+  const minutos = Math.ceil(segundos / 60);
+  const valor = minutos * PRECO_FILME_POR_MINUTO;
+  const titulo = limparTitulo(video.snippet && video.snippet.title) || "Vídeo do YouTube";
+  return `▶️ YouTube: ${titulo} tem ${minutos} minutos. Valor: ${formatarReal(valor)} (R$ ${PRECO_FILME_POR_MINUTO.toFixed(2).replace(".", ",")}/min, mesma tarifa de filmes).`;
+}
+
 async function responderFilme(titulo, ano) {
   const filme = await buscarFilmePorTitulo(titulo, ano);
 
@@ -1659,6 +1708,11 @@ app.get("/api/calculo", async (req, res) => {
 
     if (!entrada) {
       return res.send("Use assim: !calculo filme nome 1999, !calculo serie nome 1 ou !calculo coletanea nome da saga 2 ao 5");
+    }
+
+    // Links do YouTube são calculados com a mesma tarifa de filmes.
+    if (extrairIdYoutube(entrada)) {
+      return res.send(await responderYoutube(entrada));
     }
 
     if (!TMDB_KEY) {

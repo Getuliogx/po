@@ -1607,10 +1607,18 @@ async function responderYoutube(urlVideo) {
   const segundos = Number(match[1] || 0) * 3600 + Number(match[2] || 0) * 60 + Number(match[3] || 0);
   if (segundos <= 0) return "Esse vídeo não tem uma duração válida disponível para cálculo.";
 
-  const minutos = Math.floor(segundos / 60);
+  const minutosCobrados = Math.ceil(segundos / 60);
+  const valor = minutosCobrados * PRECO_FILME_POR_MINUTO;
+  const horas = Math.floor(segundos / 3600);
+  const minutos = Math.floor((segundos % 3600) / 60);
   const segundosRestantes = segundos % 60;
+  const partesDuracao = [];
+  if (horas) partesDuracao.push(`${horas}h`);
+  partesDuracao.push(`${minutos}min`);
+  partesDuracao.push(`${segundosRestantes}s`);
+  const duracaoExata = partesDuracao.join(" ");
   const titulo = limparTitulo(video.snippet && video.snippet.title) || "Vídeo do YouTube";
-  return `▶️ YouTube: ${titulo} tem ${minutos}min ${String(segundosRestantes).padStart(2, "0")}s.`;
+  return `▶️ YouTube: ${titulo} tem ${duracaoExata}. Valor total: ${formatarReal(valor)}.`;
 }
 
 async function responderFilme(titulo, ano) {
